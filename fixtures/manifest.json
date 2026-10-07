@@ -1,0 +1,12 @@
+{
+  "disclaimer": "MOCK \u2014 produced by a labelled mock adapter in this repository. No real Mail, Beeper, Contacts or Hermes source was contacted; no external message exists.",
+  "files": {
+    "corpus.json": "6f60f495d45c7728c8c1b0d9e497c266a51ad95112fa92bd18356bf66d82123e",
+    "mock_beeper.json": "40c1edfdcc220a647c216290050cae8b490b2389d12bfdaeea4fde24a2bbacb2",
+    "mock_contacts.json": "2b238188aac17a27c520358523abd53e707b6b612bc853964b3f58af1cc889d4",
+    "mock_hermes.json": "a9c7771ff15bbecd322302a9a4b7f554d25f6a3cd815af70aebc098d65998e8e",
+    "mock_mail.json": "64088822e7e2ef5b24f0f452e3d9fff1f6302313d53764b123396cd0242f7b54"
+  },
+  "mock_label": "MOCK:fixtures",
+  "note": "Deterministic recorded fixtures for components that cannot reach a real source (the macOS Mini worker, Gate 2 probes). Every record is labelled origin='mock'; nothing here was captured from Mail, Beeper or Contacts."
+}

@@ -1,0 +1,307 @@
+{
+  "accounts": [
+    {
+      "account_id": "acct_8620778f9ceb5dae",
+      "account_identity": "randy@example-beeper.test",
+      "adapter": "mock_beeper",
+      "adapter_version": "1.0.0-mock",
+      "display_name": "Beeper (MOCK primary)",
+      "enabled_operations": [
+        "manifest",
+        "health",
+        "accounts",
+        "enumerate",
+        "retrieve",
+        "history_poll",
+        "change_poll",
+        "identity_evidence",
+        "materialize_attachment",
+        "prepare_draft",
+        "dispatch",
+        "reconcile"
+      ],
+      "health_detail": null,
+      "health_state": "current",
+      "host_role": "mini",
+      "last_probe_at": "2026-10-06T21:00:00.000000Z",
+      "last_success_at": "2026-10-06T21:00:00.000000Z",
+      "mock_label": "MOCK:mock_beeper",
+      "origin": "mock",
+      "permission_state": "granted"
+    }
+  ],
+  "adapter": "mock_beeper",
+  "attachments": [
+    {
+      "adapter": "mock_beeper",
+      "attachment_ref_id": "att_9c77e2d8b0615407",
+      "available": true,
+      "content_hash": "sha256:mock-kestrel-deck",
+      "download_state": "downloaded",
+      "filename": "kestrel-status.pptx",
+      "limitation": null,
+      "media_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      "msg_ref_id": "msg_404a7f507c755415",
+      "namespaced_id": "mock_beeper:attachment:kestrel-status.pptx",
+      "size_bytes": 2048000
+    }
+  ],
+  "conversations": [
+    {
+      "account_id": "acct_8620778f9ceb5dae",
+      "adapter": "mock_beeper",
+      "audience": [
+        "@alex:example-matrix.test"
+      ],
+      "audience_kind": "direct",
+      "availability": "available",
+      "availability_reason": null,
+      "conv_id": "conv_5b9db6117aa25e3f",
+      "minimal_metadata": {},
+      "mock_label": "MOCK:mock_beeper",
+      "namespaced_id": "mock_beeper:acct_8620778f9ceb5dae:chat-alex-dm",
+      "origin": "mock",
+      "provider_chat_id": "chat-alex-dm",
+      "provider_is_merged": false,
+      "provider_thread_id": null,
+      "retrieval_pointer": "mock://mock_beeper/chat-alex-dm",
+      "revision": "1",
+      "source_time_first": "2026-10-03T19:02:00.000000Z",
+      "source_time_last": "2026-10-06T20:15:00.000000Z"
+    },
+    {
+      "account_id": "acct_8620778f9ceb5dae",
+      "adapter": "mock_beeper",
+      "audience": [
+        "@alex:example-matrix.test",
+        "@dana:example-matrix.test",
+        "@ravi:example-matrix.test"
+      ],
+      "audience_kind": "group",
+      "availability": "available",
+      "availability_reason": null,
+      "conv_id": "conv_d890d77e0e8953a6",
+      "minimal_metadata": {
+        "merged_member_chats": [
+          "chat-kestrel-dana"
+        ]
+      },
+      "mock_label": "MOCK:mock_beeper",
+      "namespaced_id": "mock_beeper:acct_8620778f9ceb5dae:chat-kestrel-group",
+      "origin": "mock",
+      "provider_chat_id": "chat-kestrel-group",
+      "provider_is_merged": true,
+      "provider_thread_id": null,
+      "retrieval_pointer": "mock://mock_beeper/chat-kestrel-group",
+      "revision": "1",
+      "source_time_first": "2026-10-04T11:00:00.000000Z",
+      "source_time_last": "2026-10-06T18:44:00.000000Z"
+    },
+    {
+      "account_id": "acct_8620778f9ceb5dae",
+      "adapter": "mock_beeper",
+      "audience": [
+        "@noreply:example-matrix.test"
+      ],
+      "audience_kind": "direct",
+      "availability": "partial",
+      "availability_reason": "MOCK: low-priority chat excluded from default search; fetched by explicit poll",
+      "conv_id": "conv_7ff4904ac6675552",
+      "minimal_metadata": {},
+      "mock_label": "MOCK:mock_beeper",
+      "namespaced_id": "mock_beeper:acct_8620778f9ceb5dae:chat-noise",
+      "origin": "mock",
+      "provider_chat_id": "chat-noise",
+      "provider_is_merged": false,
+      "provider_thread_id": null,
+      "retrieval_pointer": "mock://mock_beeper/chat-noise",
+      "revision": "1",
+      "source_time_first": "2026-10-02T06:00:00.000000Z",
+      "source_time_last": "2026-10-02T06:00:00.000000Z"
+    }
+  ],
+  "disclaimer": "MOCK \u2014 produced by a labelled mock adapter in this repository. No real Mail, Beeper, Contacts or Hermes source was contacted; no external message exists.",
+  "messages": [
+    {
+      "account_id": "acct_8620778f9ceb5dae",
+      "adapter": "mock_beeper",
+      "availability": "available",
+      "availability_reason": null,
+      "bcc": [],
+      "body_state": "fetched",
+      "cc": [],
+      "conv_id": "conv_5b9db6117aa25e3f",
+      "deleted_at_source": false,
+      "minimal_metadata": {
+        "network": "example-matrix",
+        "subject": "DM"
+      },
+      "mock_label": "MOCK:mock_beeper",
+      "msg_ref_id": "msg_a656f826597c53c2",
+      "namespaced_id": "mock_beeper:acct_8620778f9ceb5dae:beeper-alex-1",
+      "origin": "mock",
+      "provider_message_id": "beeper-alex-1",
+      "recipients": [
+        {
+          "network_identity": "@randy:example-matrix.test"
+        }
+      ],
+      "reply_headers": {},
+      "retrieval_pointer": "mock://mock_beeper/chat-alex-dm/beeper-alex-1",
+      "revision": "1",
+      "sender": {
+        "display_name": "Alex Rivera",
+        "network_identity": "@alex:example-matrix.test"
+      },
+      "source_time": "2026-10-03T19:02:00.000000Z"
+    },
+    {
+      "account_id": "acct_8620778f9ceb5dae",
+      "adapter": "mock_beeper",
+      "availability": "available",
+      "availability_reason": null,
+      "bcc": [],
+      "body_state": "fetched",
+      "cc": [],
+      "conv_id": "conv_5b9db6117aa25e3f",
+      "deleted_at_source": false,
+      "minimal_metadata": {
+        "network": "example-matrix",
+        "subject": "DM",
+        "unread": true
+      },
+      "mock_label": "MOCK:mock_beeper",
+      "msg_ref_id": "msg_6aa9c29c18c55c40",
+      "namespaced_id": "mock_beeper:acct_8620778f9ceb5dae:beeper-alex-2",
+      "origin": "mock",
+      "provider_message_id": "beeper-alex-2",
+      "recipients": [
+        {
+          "network_identity": "@randy:example-matrix.test"
+        }
+      ],
+      "reply_headers": {},
+      "retrieval_pointer": "mock://mock_beeper/chat-alex-dm/beeper-alex-2",
+      "revision": "1",
+      "sender": {
+        "display_name": "Alex Rivera",
+        "network_identity": "@alex:example-matrix.test"
+      },
+      "source_time": "2026-10-06T20:15:00.000000Z"
+    },
+    {
+      "account_id": "acct_8620778f9ceb5dae",
+      "adapter": "mock_beeper",
+      "availability": "available",
+      "availability_reason": null,
+      "bcc": [],
+      "body_state": "fetched",
+      "cc": [],
+      "conv_id": "conv_d890d77e0e8953a6",
+      "deleted_at_source": false,
+      "minimal_metadata": {
+        "network": "example-matrix",
+        "subject": "Project Kestrel"
+      },
+      "mock_label": "MOCK:mock_beeper",
+      "msg_ref_id": "msg_b472330dcd495052",
+      "namespaced_id": "mock_beeper:acct_8620778f9ceb5dae:beeper-grp-1",
+      "origin": "mock",
+      "provider_message_id": "beeper-grp-1",
+      "recipients": [
+        {
+          "network_identity": "@randy:example-matrix.test"
+        },
+        {
+          "network_identity": "@dana:example-matrix.test"
+        },
+        {
+          "network_identity": "@ravi:example-matrix.test"
+        }
+      ],
+      "reply_headers": {},
+      "retrieval_pointer": "mock://mock_beeper/chat-kestrel-group/beeper-grp-1",
+      "revision": "1",
+      "sender": {
+        "display_name": "Alex Rivera",
+        "network_identity": "@alex:example-matrix.test"
+      },
+      "source_time": "2026-10-04T11:00:00.000000Z"
+    },
+    {
+      "account_id": "acct_8620778f9ceb5dae",
+      "adapter": "mock_beeper",
+      "availability": "available",
+      "availability_reason": null,
+      "bcc": [],
+      "body_state": "fetched",
+      "cc": [],
+      "conv_id": "conv_d890d77e0e8953a6",
+      "deleted_at_source": false,
+      "minimal_metadata": {
+        "network": "example-matrix",
+        "subject": "Project Kestrel",
+        "unread": true
+      },
+      "mock_label": "MOCK:mock_beeper",
+      "msg_ref_id": "msg_404a7f507c755415",
+      "namespaced_id": "mock_beeper:acct_8620778f9ceb5dae:beeper-grp-2",
+      "origin": "mock",
+      "provider_message_id": "beeper-grp-2",
+      "recipients": [
+        {
+          "network_identity": "@randy:example-matrix.test"
+        },
+        {
+          "network_identity": "@alex:example-matrix.test"
+        },
+        {
+          "network_identity": "@ravi:example-matrix.test"
+        }
+      ],
+      "reply_headers": {},
+      "retrieval_pointer": "mock://mock_beeper/chat-kestrel-group/beeper-grp-2",
+      "revision": "1",
+      "sender": {
+        "display_name": "Dana Okafor",
+        "network_identity": "@dana:example-matrix.test"
+      },
+      "source_time": "2026-10-06T18:44:00.000000Z"
+    },
+    {
+      "account_id": "acct_8620778f9ceb5dae",
+      "adapter": "mock_beeper",
+      "availability": "partial",
+      "availability_reason": "MOCK: low-priority conversation, excluded from default search results",
+      "bcc": [],
+      "body_state": "fetched",
+      "cc": [],
+      "conv_id": "conv_7ff4904ac6675552",
+      "deleted_at_source": false,
+      "minimal_metadata": {
+        "low_priority": true,
+        "network": "example-matrix",
+        "subject": "Alert"
+      },
+      "mock_label": "MOCK:mock_beeper",
+      "msg_ref_id": "msg_1a851903ea965eb2",
+      "namespaced_id": "mock_beeper:acct_8620778f9ceb5dae:beeper-noise-1",
+      "origin": "mock",
+      "provider_message_id": "beeper-noise-1",
+      "recipients": [
+        {
+          "network_identity": "@randy:example-matrix.test"
+        }
+      ],
+      "reply_headers": {},
+      "retrieval_pointer": "mock://mock_beeper/chat-noise/beeper-noise-1",
+      "revision": "1",
+      "sender": {
+        "display_name": "Alerts",
+        "network_identity": "@noreply:example-matrix.test"
+      },
+      "source_time": "2026-10-02T06:00:00.000000Z"
+    }
+  ],
+  "mock_label": "MOCK:mock_beeper"
+}

@@ -1,0 +1,390 @@
+{
+  "accounts": [
+    {
+      "account_id": "acct_97de1a9c243a515d",
+      "account_identity": "randy@example-mail.test",
+      "adapter": "mock_mail",
+      "adapter_version": "1.0.0-mock",
+      "display_name": "Mail (MOCK primary)",
+      "enabled_operations": [
+        "manifest",
+        "health",
+        "accounts",
+        "enumerate",
+        "retrieve",
+        "history_poll",
+        "change_poll",
+        "identity_evidence",
+        "materialize_attachment",
+        "prepare_draft",
+        "dispatch",
+        "reconcile"
+      ],
+      "health_detail": null,
+      "health_state": "current",
+      "host_role": "mini",
+      "last_probe_at": "2026-10-06T21:00:00.000000Z",
+      "last_success_at": "2026-10-06T21:00:00.000000Z",
+      "mock_label": "MOCK:mock_mail",
+      "origin": "mock",
+      "permission_state": "granted"
+    }
+  ],
+  "adapter": "mock_mail",
+  "attachments": [
+    {
+      "adapter": "mock_mail",
+      "attachment_ref_id": "att_e18e99f4b6c45a8a",
+      "available": false,
+      "content_hash": null,
+      "download_state": "not_downloaded",
+      "filename": "statement-2023-04.pdf",
+      "limitation": "MOCK: Mail attachment download policy leaves this file off-device",
+      "media_type": "application/pdf",
+      "msg_ref_id": "msg_06138f5a44035584",
+      "namespaced_id": "mock_mail:attachment:statement-2023-04.pdf",
+      "size_bytes": 184320
+    }
+  ],
+  "conversations": [
+    {
+      "account_id": "acct_97de1a9c243a515d",
+      "adapter": "mock_mail",
+      "audience": [
+        "alex.rivera@example-mail.test"
+      ],
+      "audience_kind": "direct",
+      "availability": "available",
+      "availability_reason": null,
+      "conv_id": "conv_7964365bdff25991",
+      "minimal_metadata": {},
+      "mock_label": "MOCK:mock_mail",
+      "namespaced_id": "mock_mail:acct_97de1a9c243a515d:thread-alex-1",
+      "origin": "mock",
+      "provider_chat_id": null,
+      "provider_is_merged": false,
+      "provider_thread_id": "thread-alex-1",
+      "retrieval_pointer": "mock://mock_mail/thread-alex-1",
+      "revision": "1",
+      "source_time_first": "2026-09-28T08:12:00.000000Z",
+      "source_time_last": "2026-10-06T07:41:00.000000Z"
+    },
+    {
+      "account_id": "acct_97de1a9c243a515d",
+      "adapter": "mock_mail",
+      "audience": [
+        "alex.rivera@example-mail.test"
+      ],
+      "audience_kind": "direct",
+      "availability": "available",
+      "availability_reason": null,
+      "conv_id": "conv_c55d4bc62e36572f",
+      "minimal_metadata": {},
+      "mock_label": "MOCK:mock_mail",
+      "namespaced_id": "mock_mail:acct_97de1a9c243a515d:thread-invoice-4471",
+      "origin": "mock",
+      "provider_chat_id": null,
+      "provider_is_merged": false,
+      "provider_thread_id": "thread-invoice-4471",
+      "retrieval_pointer": "mock://mock_mail/thread-invoice-4471",
+      "revision": "1",
+      "source_time_first": "2026-10-01T13:00:00.000000Z",
+      "source_time_last": "2026-10-05T16:20:00.000000Z"
+    },
+    {
+      "account_id": "acct_97de1a9c243a515d",
+      "adapter": "mock_mail",
+      "audience": [
+        "supplier@example-vendor.test"
+      ],
+      "audience_kind": "direct",
+      "availability": "partial",
+      "availability_reason": "MOCK: body not fetched; attachment policy downloads on demand",
+      "conv_id": "conv_51eab47dc6a25e62",
+      "minimal_metadata": {},
+      "mock_label": "MOCK:mock_mail",
+      "namespaced_id": "mock_mail:acct_97de1a9c243a515d:thread-supplier-9",
+      "origin": "mock",
+      "provider_chat_id": null,
+      "provider_is_merged": false,
+      "provider_thread_id": "thread-supplier-9",
+      "retrieval_pointer": "mock://mock_mail/thread-supplier-9",
+      "revision": "1",
+      "source_time_first": "2023-04-02T10:05:00.000000Z",
+      "source_time_last": "2023-04-02T10:05:00.000000Z"
+    },
+    {
+      "account_id": "acct_97de1a9c243a515d",
+      "adapter": "mock_mail",
+      "audience": [
+        "ghost@example-mail.test"
+      ],
+      "audience_kind": "direct",
+      "availability": "unavailable",
+      "availability_reason": "MOCK: source message deleted upstream; tombstone retained",
+      "conv_id": "conv_3111551ecf5d5bd9",
+      "minimal_metadata": {},
+      "mock_label": "MOCK:mock_mail",
+      "namespaced_id": "mock_mail:acct_97de1a9c243a515d:thread-deleted-3",
+      "origin": "mock",
+      "provider_chat_id": null,
+      "provider_is_merged": false,
+      "provider_thread_id": "thread-deleted-3",
+      "retrieval_pointer": "mock://mock_mail/thread-deleted-3",
+      "revision": "1",
+      "source_time_first": "2026-09-30T08:00:00.000000Z",
+      "source_time_last": "2026-09-30T08:00:00.000000Z"
+    }
+  ],
+  "disclaimer": "MOCK \u2014 produced by a labelled mock adapter in this repository. No real Mail, Beeper, Contacts or Hermes source was contacted; no external message exists.",
+  "messages": [
+    {
+      "account_id": "acct_97de1a9c243a515d",
+      "adapter": "mock_mail",
+      "availability": "available",
+      "availability_reason": null,
+      "bcc": [],
+      "body_state": "fetched",
+      "cc": [],
+      "conv_id": "conv_7964365bdff25991",
+      "deleted_at_source": false,
+      "minimal_metadata": {
+        "subject": "Kestrel roll-out",
+        "unread": true
+      },
+      "mock_label": "MOCK:mock_mail",
+      "msg_ref_id": "msg_1b6350d791285c1c",
+      "namespaced_id": "mock_mail:acct_97de1a9c243a515d:mail-alex-1",
+      "origin": "mock",
+      "provider_message_id": "mail-alex-1",
+      "recipients": [
+        {
+          "address": "randy@example-mail.test",
+          "display_name": "Randy"
+        }
+      ],
+      "reply_headers": {
+        "message_id": "<a1@example-mail.test>",
+        "references": []
+      },
+      "retrieval_pointer": "mock://mock_mail/thread-alex-1/mail-alex-1",
+      "revision": "1",
+      "sender": {
+        "address": "alex.rivera@example-mail.test",
+        "display_name": "Alex Rivera"
+      },
+      "source_time": "2026-09-28T08:12:00.000000Z"
+    },
+    {
+      "account_id": "acct_97de1a9c243a515d",
+      "adapter": "mock_mail",
+      "availability": "available",
+      "availability_reason": null,
+      "bcc": [],
+      "body_state": "fetched",
+      "cc": [],
+      "conv_id": "conv_7964365bdff25991",
+      "deleted_at_source": false,
+      "minimal_metadata": {
+        "subject": "Re: Kestrel roll-out"
+      },
+      "mock_label": "MOCK:mock_mail",
+      "msg_ref_id": "msg_8437bddb6c9c5fc1",
+      "namespaced_id": "mock_mail:acct_97de1a9c243a515d:mail-alex-2",
+      "origin": "mock",
+      "provider_message_id": "mail-alex-2",
+      "recipients": [
+        "alex.rivera@example-mail.test"
+      ],
+      "reply_headers": {
+        "message_id": "<a2@example-mail.test>",
+        "references": [
+          "<a1@example-mail.test>"
+        ]
+      },
+      "retrieval_pointer": "mock://mock_mail/thread-alex-1/mail-alex-2",
+      "revision": "1",
+      "sender": {
+        "address": "randy@example-mail.test",
+        "display_name": "Randy"
+      },
+      "source_time": "2026-09-28T09:30:00.000000Z"
+    },
+    {
+      "account_id": "acct_97de1a9c243a515d",
+      "adapter": "mock_mail",
+      "availability": "available",
+      "availability_reason": null,
+      "bcc": [
+        "archive@example-mail.test"
+      ],
+      "body_state": "fetched",
+      "cc": [
+        "dana@example-mail.test"
+      ],
+      "conv_id": "conv_7964365bdff25991",
+      "deleted_at_source": false,
+      "minimal_metadata": {
+        "subject": "Re: Kestrel roll-out",
+        "unread": true
+      },
+      "mock_label": "MOCK:mock_mail",
+      "msg_ref_id": "msg_ecd51a1b413f542e",
+      "namespaced_id": "mock_mail:acct_97de1a9c243a515d:mail-alex-3",
+      "origin": "mock",
+      "provider_message_id": "mail-alex-3",
+      "recipients": [
+        {
+          "address": "randy@example-mail.test",
+          "display_name": "Randy"
+        }
+      ],
+      "reply_headers": {
+        "message_id": "<a3@example-mail.test>",
+        "references": [
+          "<a1@example-mail.test>"
+        ]
+      },
+      "retrieval_pointer": "mock://mock_mail/thread-alex-1/mail-alex-3",
+      "revision": "1",
+      "sender": {
+        "address": "alex.rivera@example-mail.test",
+        "display_name": "Alex Rivera"
+      },
+      "source_time": "2026-10-06T07:41:00.000000Z"
+    },
+    {
+      "account_id": "acct_97de1a9c243a515d",
+      "adapter": "mock_mail",
+      "availability": "available",
+      "availability_reason": null,
+      "bcc": [],
+      "body_state": "fetched",
+      "cc": [],
+      "conv_id": "conv_c55d4bc62e36572f",
+      "deleted_at_source": false,
+      "minimal_metadata": {
+        "subject": "Invoice #4471",
+        "unread": true
+      },
+      "mock_label": "MOCK:mock_mail",
+      "msg_ref_id": "msg_18c92ddf7d2c5789",
+      "namespaced_id": "mock_mail:acct_97de1a9c243a515d:mail-inv-1",
+      "origin": "mock",
+      "provider_message_id": "mail-inv-1",
+      "recipients": [
+        {
+          "address": "randy@example-mail.test",
+          "display_name": "Randy"
+        }
+      ],
+      "reply_headers": {},
+      "retrieval_pointer": "mock://mock_mail/thread-invoice-4471/mail-inv-1",
+      "revision": "1",
+      "sender": {
+        "address": "alex.rivera@example-mail.test",
+        "display_name": "Alex Rivera"
+      },
+      "source_time": "2026-10-01T13:00:00.000000Z"
+    },
+    {
+      "account_id": "acct_97de1a9c243a515d",
+      "adapter": "mock_mail",
+      "availability": "available",
+      "availability_reason": null,
+      "bcc": [],
+      "body_state": "fetched",
+      "cc": [],
+      "conv_id": "conv_c55d4bc62e36572f",
+      "deleted_at_source": false,
+      "minimal_metadata": {
+        "subject": "Re: Invoice #4471",
+        "unread": true
+      },
+      "mock_label": "MOCK:mock_mail",
+      "msg_ref_id": "msg_4348c82754065571",
+      "namespaced_id": "mock_mail:acct_97de1a9c243a515d:mail-inv-2",
+      "origin": "mock",
+      "provider_message_id": "mail-inv-2",
+      "recipients": [
+        {
+          "address": "randy@example-mail.test",
+          "display_name": "Randy"
+        }
+      ],
+      "reply_headers": {},
+      "retrieval_pointer": "mock://mock_mail/thread-invoice-4471/mail-inv-2",
+      "revision": "1",
+      "sender": {
+        "address": "alex.rivera@example-mail.test",
+        "display_name": "Alex Rivera"
+      },
+      "source_time": "2026-10-05T16:20:00.000000Z"
+    },
+    {
+      "account_id": "acct_97de1a9c243a515d",
+      "adapter": "mock_mail",
+      "availability": "partial",
+      "availability_reason": "MOCK: body not fetched and attachment not downloaded locally",
+      "bcc": [],
+      "body_state": "not_fetched",
+      "cc": [],
+      "conv_id": "conv_51eab47dc6a25e62",
+      "deleted_at_source": false,
+      "minimal_metadata": {
+        "subject": "Statement April 2023"
+      },
+      "mock_label": "MOCK:mock_mail",
+      "msg_ref_id": "msg_06138f5a44035584",
+      "namespaced_id": "mock_mail:acct_97de1a9c243a515d:mail-old-1",
+      "origin": "mock",
+      "provider_message_id": "mail-old-1",
+      "recipients": [
+        {
+          "address": "randy@example-mail.test",
+          "display_name": "Randy"
+        }
+      ],
+      "reply_headers": {},
+      "retrieval_pointer": "mock://mock_mail/thread-supplier-9/mail-old-1",
+      "revision": "1",
+      "sender": {
+        "address": "supplier@example-vendor.test",
+        "display_name": "Vendor Accounts"
+      },
+      "source_time": "2023-04-02T10:05:00.000000Z"
+    },
+    {
+      "account_id": "acct_97de1a9c243a515d",
+      "adapter": "mock_mail",
+      "availability": "unavailable",
+      "availability_reason": "MOCK: source message deleted upstream",
+      "bcc": [],
+      "body_state": "missing",
+      "cc": [],
+      "conv_id": "conv_3111551ecf5d5bd9",
+      "deleted_at_source": true,
+      "minimal_metadata": {},
+      "mock_label": "MOCK:mock_mail",
+      "msg_ref_id": "msg_947646fc8a5a5c11",
+      "namespaced_id": "mock_mail:acct_97de1a9c243a515d:mail-del-1",
+      "origin": "mock",
+      "provider_message_id": "mail-del-1",
+      "recipients": [
+        {
+          "address": "randy@example-mail.test",
+          "display_name": "Randy"
+        }
+      ],
+      "reply_headers": {},
+      "retrieval_pointer": "mock://mock_mail/thread-deleted-3/mail-del-1",
+      "revision": "1",
+      "sender": {
+        "address": "ghost@example-mail.test",
+        "display_name": "Ghost"
+      },
+      "source_time": "2026-09-30T08:00:00.000000Z"
+    }
+  ],
+  "mock_label": "MOCK:mock_mail"
+}

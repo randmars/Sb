@@ -1,0 +1,36 @@
+{
+  "accounts": [
+    {
+      "account_id": "acct_609971a0e0725b73",
+      "account_identity": "grace:mock-profile",
+      "adapter": "mock_hermes",
+      "adapter_version": "1.0.0-mock",
+      "display_name": "Hermes (MOCK runtime)",
+      "enabled_operations": [
+        "manifest",
+        "health",
+        "accounts",
+        "enumerate",
+        "retrieve",
+        "history_poll",
+        "change_poll",
+        "identity_evidence",
+        "materialize_attachment"
+      ],
+      "health_detail": null,
+      "health_state": "current",
+      "host_role": "mini",
+      "last_probe_at": "2026-10-06T21:00:00.000000Z",
+      "last_success_at": "2026-10-06T21:00:00.000000Z",
+      "mock_label": "MOCK:mock_hermes",
+      "origin": "mock",
+      "permission_state": "granted"
+    }
+  ],
+  "adapter": "mock_hermes",
+  "attachments": [],
+  "conversations": [],
+  "disclaimer": "MOCK \u2014 produced by a labelled mock adapter in this repository. No real Mail, Beeper, Contacts or Hermes source was contacted; no external message exists.",
+  "messages": [],
+  "mock_label": "MOCK:mock_hermes"
+}

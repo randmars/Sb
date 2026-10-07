@@ -1,0 +1,935 @@
+{
+  "accounts": [
+    {
+      "account_id": "acct_97de1a9c243a515d",
+      "account_identity": "randy@example-mail.test",
+      "adapter": "mock_mail",
+      "adapter_version": "1.0.0-mock",
+      "display_name": "Mail (MOCK primary)",
+      "enabled_operations": [
+        "manifest",
+        "health",
+        "accounts",
+        "enumerate",
+        "retrieve",
+        "history_poll",
+        "change_poll",
+        "identity_evidence",
+        "materialize_attachment",
+        "prepare_draft",
+        "dispatch",
+        "reconcile"
+      ],
+      "health_detail": null,
+      "health_state": "current",
+      "host_role": "mini",
+      "last_probe_at": "2026-10-06T21:00:00.000000Z",
+      "last_success_at": "2026-10-06T21:00:00.000000Z",
+      "mock_label": "MOCK:mock_mail",
+      "origin": "mock",
+      "permission_state": "granted"
+    },
+    {
+      "account_id": "acct_8620778f9ceb5dae",
+      "account_identity": "randy@example-beeper.test",
+      "adapter": "mock_beeper",
+      "adapter_version": "1.0.0-mock",
+      "display_name": "Beeper (MOCK primary)",
+      "enabled_operations": [
+        "manifest",
+        "health",
+        "accounts",
+        "enumerate",
+        "retrieve",
+        "history_poll",
+        "change_poll",
+        "identity_evidence",
+        "materialize_attachment",
+        "prepare_draft",
+        "dispatch",
+        "reconcile"
+      ],
+      "health_detail": null,
+      "health_state": "current",
+      "host_role": "mini",
+      "last_probe_at": "2026-10-06T21:00:00.000000Z",
+      "last_success_at": "2026-10-06T21:00:00.000000Z",
+      "mock_label": "MOCK:mock_beeper",
+      "origin": "mock",
+      "permission_state": "granted"
+    },
+    {
+      "account_id": "acct_26af76a854f951ee",
+      "account_identity": "device:mock-mini",
+      "adapter": "mock_contacts",
+      "adapter_version": "1.0.0-mock",
+      "display_name": "Contacts (MOCK mini device)",
+      "enabled_operations": [
+        "manifest",
+        "health",
+        "accounts",
+        "enumerate",
+        "retrieve",
+        "history_poll",
+        "change_poll",
+        "identity_evidence",
+        "materialize_attachment"
+      ],
+      "health_detail": "MOCK: contacts permission denied in this simulated session",
+      "health_state": "permission_denied",
+      "host_role": "mini",
+      "last_probe_at": "2026-10-06T21:00:00.000000Z",
+      "last_success_at": "2026-10-06T21:00:00.000000Z",
+      "mock_label": "MOCK:mock_contacts",
+      "origin": "mock",
+      "permission_state": "denied"
+    },
+    {
+      "account_id": "acct_609971a0e0725b73",
+      "account_identity": "grace:mock-profile",
+      "adapter": "mock_hermes",
+      "adapter_version": "1.0.0-mock",
+      "display_name": "Hermes (MOCK runtime)",
+      "enabled_operations": [
+        "manifest",
+        "health",
+        "accounts",
+        "enumerate",
+        "retrieve",
+        "history_poll",
+        "change_poll",
+        "identity_evidence",
+        "materialize_attachment"
+      ],
+      "health_detail": null,
+      "health_state": "current",
+      "host_role": "mini",
+      "last_probe_at": "2026-10-06T21:00:00.000000Z",
+      "last_success_at": "2026-10-06T21:00:00.000000Z",
+      "mock_label": "MOCK:mock_hermes",
+      "origin": "mock",
+      "permission_state": "granted"
+    }
+  ],
+  "attachments": [
+    {
+      "attachment_ref_id": "att_e18e99f4b6c45a8a",
+      "available": false,
+      "content_hash": null,
+      "download_state": "not_downloaded",
+      "filename": "statement-2023-04.pdf",
+      "limitation": "MOCK: Mail attachment download policy leaves this file off-device",
+      "media_type": "application/pdf",
+      "msg_ref_id": "msg_06138f5a44035584",
+      "namespaced_id": "mock_mail:attachment:statement-2023-04.pdf",
+      "size_bytes": 184320
+    },
+    {
+      "attachment_ref_id": "att_9c77e2d8b0615407",
+      "available": true,
+      "content_hash": "sha256:mock-kestrel-deck",
+      "download_state": "downloaded",
+      "filename": "kestrel-status.pptx",
+      "limitation": null,
+      "media_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      "msg_ref_id": "msg_404a7f507c755415",
+      "namespaced_id": "mock_beeper:attachment:kestrel-status.pptx",
+      "size_bytes": 2048000
+    }
+  ],
+  "conversations": [
+    {
+      "account_id": "acct_97de1a9c243a515d",
+      "adapter": "mock_mail",
+      "audience": [
+        "alex.rivera@example-mail.test"
+      ],
+      "audience_kind": "direct",
+      "availability": "available",
+      "availability_reason": null,
+      "conv_id": "conv_7964365bdff25991",
+      "minimal_metadata": {},
+      "mock_label": "MOCK:mock_mail",
+      "namespaced_id": "mock_mail:acct_97de1a9c243a515d:thread-alex-1",
+      "origin": "mock",
+      "provider_chat_id": null,
+      "provider_is_merged": false,
+      "provider_thread_id": "thread-alex-1",
+      "retrieval_pointer": "mock://mock_mail/thread-alex-1",
+      "revision": "1",
+      "source_time_first": "2026-09-28T08:12:00.000000Z",
+      "source_time_last": "2026-10-06T07:41:00.000000Z"
+    },
+    {
+      "account_id": "acct_97de1a9c243a515d",
+      "adapter": "mock_mail",
+      "audience": [
+        "alex.rivera@example-mail.test"
+      ],
+      "audience_kind": "direct",
+      "availability": "available",
+      "availability_reason": null,
+      "conv_id": "conv_c55d4bc62e36572f",
+      "minimal_metadata": {},
+      "mock_label": "MOCK:mock_mail",
+      "namespaced_id": "mock_mail:acct_97de1a9c243a515d:thread-invoice-4471",
+      "origin": "mock",
+      "provider_chat_id": null,
+      "provider_is_merged": false,
+      "provider_thread_id": "thread-invoice-4471",
+      "retrieval_pointer": "mock://mock_mail/thread-invoice-4471",
+      "revision": "1",
+      "source_time_first": "2026-10-01T13:00:00.000000Z",
+      "source_time_last": "2026-10-05T16:20:00.000000Z"
+    },
+    {
+      "account_id": "acct_97de1a9c243a515d",
+      "adapter": "mock_mail",
+      "audience": [
+        "supplier@example-vendor.test"
+      ],
+      "audience_kind": "direct",
+      "availability": "partial",
+      "availability_reason": "MOCK: body not fetched; attachment policy downloads on demand",
+      "conv_id": "conv_51eab47dc6a25e62",
+      "minimal_metadata": {},
+      "mock_label": "MOCK:mock_mail",
+      "namespaced_id": "mock_mail:acct_97de1a9c243a515d:thread-supplier-9",
+      "origin": "mock",
+      "provider_chat_id": null,
+      "provider_is_merged": false,
+      "provider_thread_id": "thread-supplier-9",
+      "retrieval_pointer": "mock://mock_mail/thread-supplier-9",
+      "revision": "1",
+      "source_time_first": "2023-04-02T10:05:00.000000Z",
+      "source_time_last": "2023-04-02T10:05:00.000000Z"
+    },
+    {
+      "account_id": "acct_97de1a9c243a515d",
+      "adapter": "mock_mail",
+      "audience": [
+        "ghost@example-mail.test"
+      ],
+      "audience_kind": "direct",
+      "availability": "unavailable",
+      "availability_reason": "MOCK: source message deleted upstream; tombstone retained",
+      "conv_id": "conv_3111551ecf5d5bd9",
+      "minimal_metadata": {},
+      "mock_label": "MOCK:mock_mail",
+      "namespaced_id": "mock_mail:acct_97de1a9c243a515d:thread-deleted-3",
+      "origin": "mock",
+      "provider_chat_id": null,
+      "provider_is_merged": false,
+      "provider_thread_id": "thread-deleted-3",
+      "retrieval_pointer": "mock://mock_mail/thread-deleted-3",
+      "revision": "1",
+      "source_time_first": "2026-09-30T08:00:00.000000Z",
+      "source_time_last": "2026-09-30T08:00:00.000000Z"
+    },
+    {
+      "account_id": "acct_8620778f9ceb5dae",
+      "adapter": "mock_beeper",
+      "audience": [
+        "@alex:example-matrix.test"
+      ],
+      "audience_kind": "direct",
+      "availability": "available",
+      "availability_reason": null,
+      "conv_id": "conv_5b9db6117aa25e3f",
+      "minimal_metadata": {},
+      "mock_label": "MOCK:mock_beeper",
+      "namespaced_id": "mock_beeper:acct_8620778f9ceb5dae:chat-alex-dm",
+      "origin": "mock",
+      "provider_chat_id": "chat-alex-dm",
+      "provider_is_merged": false,
+      "provider_thread_id": null,
+      "retrieval_pointer": "mock://mock_beeper/chat-alex-dm",
+      "revision": "1",
+      "source_time_first": "2026-10-03T19:02:00.000000Z",
+      "source_time_last": "2026-10-06T20:15:00.000000Z"
+    },
+    {
+      "account_id": "acct_8620778f9ceb5dae",
+      "adapter": "mock_beeper",
+      "audience": [
+        "@alex:example-matrix.test",
+        "@dana:example-matrix.test",
+        "@ravi:example-matrix.test"
+      ],
+      "audience_kind": "group",
+      "availability": "available",
+      "availability_reason": null,
+      "conv_id": "conv_d890d77e0e8953a6",
+      "minimal_metadata": {
+        "merged_member_chats": [
+          "chat-kestrel-dana"
+        ]
+      },
+      "mock_label": "MOCK:mock_beeper",
+      "namespaced_id": "mock_beeper:acct_8620778f9ceb5dae:chat-kestrel-group",
+      "origin": "mock",
+      "provider_chat_id": "chat-kestrel-group",
+      "provider_is_merged": true,
+      "provider_thread_id": null,
+      "retrieval_pointer": "mock://mock_beeper/chat-kestrel-group",
+      "revision": "1",
+      "source_time_first": "2026-10-04T11:00:00.000000Z",
+      "source_time_last": "2026-10-06T18:44:00.000000Z"
+    },
+    {
+      "account_id": "acct_8620778f9ceb5dae",
+      "adapter": "mock_beeper",
+      "audience": [
+        "@noreply:example-matrix.test"
+      ],
+      "audience_kind": "direct",
+      "availability": "partial",
+      "availability_reason": "MOCK: low-priority chat excluded from default search; fetched by explicit poll",
+      "conv_id": "conv_7ff4904ac6675552",
+      "minimal_metadata": {},
+      "mock_label": "MOCK:mock_beeper",
+      "namespaced_id": "mock_beeper:acct_8620778f9ceb5dae:chat-noise",
+      "origin": "mock",
+      "provider_chat_id": "chat-noise",
+      "provider_is_merged": false,
+      "provider_thread_id": null,
+      "retrieval_pointer": "mock://mock_beeper/chat-noise",
+      "revision": "1",
+      "source_time_first": "2026-10-02T06:00:00.000000Z",
+      "source_time_last": "2026-10-02T06:00:00.000000Z"
+    }
+  ],
+  "fixture_set_version": "fixtures-1.0",
+  "groups": [
+    {
+      "account_id": "acct_8620778f9ceb5dae",
+      "audience_json": [
+        "@alex:example-matrix.test",
+        "@dana:example-matrix.test",
+        "@ravi:example-matrix.test"
+      ],
+      "group_id": "group_c06053f982bd5aaf",
+      "member_identity_json": [
+        "@alex:example-matrix.test",
+        "@dana:example-matrix.test",
+        "@ravi:example-matrix.test"
+      ],
+      "membership_version": "3",
+      "stable_source_identity": "chat-kestrel-group",
+      "title": "Project Kestrel",
+      "user_created": 0
+    }
+  ],
+  "identity_links": [
+    {
+      "adapter": "mock_mail",
+      "confidence": 0.98,
+      "evidence": "exact_normalized_address_match",
+      "kind": "email",
+      "normalized_value": "alex.rivera@example-mail.test",
+      "person_id": "person_9664e4ce5c65524b",
+      "state": "confirmed",
+      "user_override": 0
+    },
+    {
+      "adapter": "mock_beeper",
+      "confidence": 0.9,
+      "evidence": "exact_normalized_identity_match",
+      "kind": "network_identity",
+      "normalized_value": "@alex:example-matrix.test",
+      "person_id": "person_9664e4ce5c65524b",
+      "state": "confirmed",
+      "user_override": 0
+    },
+    {
+      "adapter": "mock_mail",
+      "confidence": 0.97,
+      "evidence": "exact_normalized_address_match",
+      "kind": "email",
+      "normalized_value": "sam.patel@example-mail.test",
+      "person_id": "person_abfabdfa359e5d73",
+      "state": "confirmed",
+      "user_override": 0
+    },
+    {
+      "adapter": "mock_mail",
+      "confidence": 0.97,
+      "evidence": "exact_normalized_address_match",
+      "kind": "email",
+      "normalized_value": "sam.patel@example-other.test",
+      "person_id": "person_b9d9321a79fc5be7",
+      "state": "confirmed",
+      "user_override": 0
+    },
+    {
+      "adapter": "mock_mail",
+      "confidence": 0.35,
+      "evidence": "shared_alias_used_by_multiple_people",
+      "kind": "email",
+      "normalized_value": "accounts@example-mail.test",
+      "person_id": "person_abfabdfa359e5d73",
+      "state": "proposed",
+      "user_override": 0
+    },
+    {
+      "adapter": "mock_contacts",
+      "confidence": 0.8,
+      "evidence": "native_contact_phone_match",
+      "kind": "phone",
+      "normalized_value": "+15550100",
+      "person_id": "person_231853f75f405bcc",
+      "state": "proposed",
+      "user_override": 0
+    }
+  ],
+  "messages": [
+    {
+      "account_id": "acct_97de1a9c243a515d",
+      "adapter": "mock_mail",
+      "availability": "available",
+      "availability_reason": null,
+      "bcc": [],
+      "body_state": "fetched",
+      "cc": [],
+      "conv_id": "conv_7964365bdff25991",
+      "deleted_at_source": false,
+      "minimal_metadata": {
+        "subject": "Kestrel roll-out",
+        "unread": true
+      },
+      "mock_label": "MOCK:mock_mail",
+      "msg_ref_id": "msg_1b6350d791285c1c",
+      "namespaced_id": "mock_mail:acct_97de1a9c243a515d:mail-alex-1",
+      "origin": "mock",
+      "provider_message_id": "mail-alex-1",
+      "recipients": [
+        {
+          "address": "randy@example-mail.test",
+          "display_name": "Randy"
+        }
+      ],
+      "reply_headers": {
+        "message_id": "<a1@example-mail.test>",
+        "references": []
+      },
+      "retrieval_pointer": "mock://mock_mail/thread-alex-1/mail-alex-1",
+      "revision": "1",
+      "sender": {
+        "address": "alex.rivera@example-mail.test",
+        "display_name": "Alex Rivera"
+      },
+      "source_time": "2026-09-28T08:12:00.000000Z"
+    },
+    {
+      "account_id": "acct_97de1a9c243a515d",
+      "adapter": "mock_mail",
+      "availability": "available",
+      "availability_reason": null,
+      "bcc": [],
+      "body_state": "fetched",
+      "cc": [],
+      "conv_id": "conv_7964365bdff25991",
+      "deleted_at_source": false,
+      "minimal_metadata": {
+        "subject": "Re: Kestrel roll-out"
+      },
+      "mock_label": "MOCK:mock_mail",
+      "msg_ref_id": "msg_8437bddb6c9c5fc1",
+      "namespaced_id": "mock_mail:acct_97de1a9c243a515d:mail-alex-2",
+      "origin": "mock",
+      "provider_message_id": "mail-alex-2",
+      "recipients": [
+        "alex.rivera@example-mail.test"
+      ],
+      "reply_headers": {
+        "message_id": "<a2@example-mail.test>",
+        "references": [
+          "<a1@example-mail.test>"
+        ]
+      },
+      "retrieval_pointer": "mock://mock_mail/thread-alex-1/mail-alex-2",
+      "revision": "1",
+      "sender": {
+        "address": "randy@example-mail.test",
+        "display_name": "Randy"
+      },
+      "source_time": "2026-09-28T09:30:00.000000Z"
+    },
+    {
+      "account_id": "acct_97de1a9c243a515d",
+      "adapter": "mock_mail",
+      "availability": "available",
+      "availability_reason": null,
+      "bcc": [
+        "archive@example-mail.test"
+      ],
+      "body_state": "fetched",
+      "cc": [
+        "dana@example-mail.test"
+      ],
+      "conv_id": "conv_7964365bdff25991",
+      "deleted_at_source": false,
+      "minimal_metadata": {
+        "subject": "Re: Kestrel roll-out",
+        "unread": true
+      },
+      "mock_label": "MOCK:mock_mail",
+      "msg_ref_id": "msg_ecd51a1b413f542e",
+      "namespaced_id": "mock_mail:acct_97de1a9c243a515d:mail-alex-3",
+      "origin": "mock",
+      "provider_message_id": "mail-alex-3",
+      "recipients": [
+        {
+          "address": "randy@example-mail.test",
+          "display_name": "Randy"
+        }
+      ],
+      "reply_headers": {
+        "message_id": "<a3@example-mail.test>",
+        "references": [
+          "<a1@example-mail.test>"
+        ]
+      },
+      "retrieval_pointer": "mock://mock_mail/thread-alex-1/mail-alex-3",
+      "revision": "1",
+      "sender": {
+        "address": "alex.rivera@example-mail.test",
+        "display_name": "Alex Rivera"
+      },
+      "source_time": "2026-10-06T07:41:00.000000Z"
+    },
+    {
+      "account_id": "acct_97de1a9c243a515d",
+      "adapter": "mock_mail",
+      "availability": "available",
+      "availability_reason": null,
+      "bcc": [],
+      "body_state": "fetched",
+      "cc": [],
+      "conv_id": "conv_c55d4bc62e36572f",
+      "deleted_at_source": false,
+      "minimal_metadata": {
+        "subject": "Invoice #4471",
+        "unread": true
+      },
+      "mock_label": "MOCK:mock_mail",
+      "msg_ref_id": "msg_18c92ddf7d2c5789",
+      "namespaced_id": "mock_mail:acct_97de1a9c243a515d:mail-inv-1",
+      "origin": "mock",
+      "provider_message_id": "mail-inv-1",
+      "recipients": [
+        {
+          "address": "randy@example-mail.test",
+          "display_name": "Randy"
+        }
+      ],
+      "reply_headers": {},
+      "retrieval_pointer": "mock://mock_mail/thread-invoice-4471/mail-inv-1",
+      "revision": "1",
+      "sender": {
+        "address": "alex.rivera@example-mail.test",
+        "display_name": "Alex Rivera"
+      },
+      "source_time": "2026-10-01T13:00:00.000000Z"
+    },
+    {
+      "account_id": "acct_97de1a9c243a515d",
+      "adapter": "mock_mail",
+      "availability": "available",
+      "availability_reason": null,
+      "bcc": [],
+      "body_state": "fetched",
+      "cc": [],
+      "conv_id": "conv_c55d4bc62e36572f",
+      "deleted_at_source": false,
+      "minimal_metadata": {
+        "subject": "Re: Invoice #4471",
+        "unread": true
+      },
+      "mock_label": "MOCK:mock_mail",
+      "msg_ref_id": "msg_4348c82754065571",
+      "namespaced_id": "mock_mail:acct_97de1a9c243a515d:mail-inv-2",
+      "origin": "mock",
+      "provider_message_id": "mail-inv-2",
+      "recipients": [
+        {
+          "address": "randy@example-mail.test",
+          "display_name": "Randy"
+        }
+      ],
+      "reply_headers": {},
+      "retrieval_pointer": "mock://mock_mail/thread-invoice-4471/mail-inv-2",
+      "revision": "1",
+      "sender": {
+        "address": "alex.rivera@example-mail.test",
+        "display_name": "Alex Rivera"
+      },
+      "source_time": "2026-10-05T16:20:00.000000Z"
+    },
+    {
+      "account_id": "acct_97de1a9c243a515d",
+      "adapter": "mock_mail",
+      "availability": "partial",
+      "availability_reason": "MOCK: body not fetched and attachment not downloaded locally",
+      "bcc": [],
+      "body_state": "not_fetched",
+      "cc": [],
+      "conv_id": "conv_51eab47dc6a25e62",
+      "deleted_at_source": false,
+      "minimal_metadata": {
+        "subject": "Statement April 2023"
+      },
+      "mock_label": "MOCK:mock_mail",
+      "msg_ref_id": "msg_06138f5a44035584",
+      "namespaced_id": "mock_mail:acct_97de1a9c243a515d:mail-old-1",
+      "origin": "mock",
+      "provider_message_id": "mail-old-1",
+      "recipients": [
+        {
+          "address": "randy@example-mail.test",
+          "display_name": "Randy"
+        }
+      ],
+      "reply_headers": {},
+      "retrieval_pointer": "mock://mock_mail/thread-supplier-9/mail-old-1",
+      "revision": "1",
+      "sender": {
+        "address": "supplier@example-vendor.test",
+        "display_name": "Vendor Accounts"
+      },
+      "source_time": "2023-04-02T10:05:00.000000Z"
+    },
+    {
+      "account_id": "acct_97de1a9c243a515d",
+      "adapter": "mock_mail",
+      "availability": "unavailable",
+      "availability_reason": "MOCK: source message deleted upstream",
+      "bcc": [],
+      "body_state": "missing",
+      "cc": [],
+      "conv_id": "conv_3111551ecf5d5bd9",
+      "deleted_at_source": true,
+      "minimal_metadata": {},
+      "mock_label": "MOCK:mock_mail",
+      "msg_ref_id": "msg_947646fc8a5a5c11",
+      "namespaced_id": "mock_mail:acct_97de1a9c243a515d:mail-del-1",
+      "origin": "mock",
+      "provider_message_id": "mail-del-1",
+      "recipients": [
+        {
+          "address": "randy@example-mail.test",
+          "display_name": "Randy"
+        }
+      ],
+      "reply_headers": {},
+      "retrieval_pointer": "mock://mock_mail/thread-deleted-3/mail-del-1",
+      "revision": "1",
+      "sender": {
+        "address": "ghost@example-mail.test",
+        "display_name": "Ghost"
+      },
+      "source_time": "2026-09-30T08:00:00.000000Z"
+    },
+    {
+      "account_id": "acct_8620778f9ceb5dae",
+      "adapter": "mock_beeper",
+      "availability": "available",
+      "availability_reason": null,
+      "bcc": [],
+      "body_state": "fetched",
+      "cc": [],
+      "conv_id": "conv_5b9db6117aa25e3f",
+      "deleted_at_source": false,
+      "minimal_metadata": {
+        "network": "example-matrix",
+        "subject": "DM"
+      },
+      "mock_label": "MOCK:mock_beeper",
+      "msg_ref_id": "msg_a656f826597c53c2",
+      "namespaced_id": "mock_beeper:acct_8620778f9ceb5dae:beeper-alex-1",
+      "origin": "mock",
+      "provider_message_id": "beeper-alex-1",
+      "recipients": [
+        {
+          "network_identity": "@randy:example-matrix.test"
+        }
+      ],
+      "reply_headers": {},
+      "retrieval_pointer": "mock://mock_beeper/chat-alex-dm/beeper-alex-1",
+      "revision": "1",
+      "sender": {
+        "display_name": "Alex Rivera",
+        "network_identity": "@alex:example-matrix.test"
+      },
+      "source_time": "2026-10-03T19:02:00.000000Z"
+    },
+    {
+      "account_id": "acct_8620778f9ceb5dae",
+      "adapter": "mock_beeper",
+      "availability": "available",
+      "availability_reason": null,
+      "bcc": [],
+      "body_state": "fetched",
+      "cc": [],
+      "conv_id": "conv_5b9db6117aa25e3f",
+      "deleted_at_source": false,
+      "minimal_metadata": {
+        "network": "example-matrix",
+        "subject": "DM",
+        "unread": true
+      },
+      "mock_label": "MOCK:mock_beeper",
+      "msg_ref_id": "msg_6aa9c29c18c55c40",
+      "namespaced_id": "mock_beeper:acct_8620778f9ceb5dae:beeper-alex-2",
+      "origin": "mock",
+      "provider_message_id": "beeper-alex-2",
+      "recipients": [
+        {
+          "network_identity": "@randy:example-matrix.test"
+        }
+      ],
+      "reply_headers": {},
+      "retrieval_pointer": "mock://mock_beeper/chat-alex-dm/beeper-alex-2",
+      "revision": "1",
+      "sender": {
+        "display_name": "Alex Rivera",
+        "network_identity": "@alex:example-matrix.test"
+      },
+      "source_time": "2026-10-06T20:15:00.000000Z"
+    },
+    {
+      "account_id": "acct_8620778f9ceb5dae",
+      "adapter": "mock_beeper",
+      "availability": "available",
+      "availability_reason": null,
+      "bcc": [],
+      "body_state": "fetched",
+      "cc": [],
+      "conv_id": "conv_d890d77e0e8953a6",
+      "deleted_at_source": false,
+      "minimal_metadata": {
+        "network": "example-matrix",
+        "subject": "Project Kestrel"
+      },
+      "mock_label": "MOCK:mock_beeper",
+      "msg_ref_id": "msg_b472330dcd495052",
+      "namespaced_id": "mock_beeper:acct_8620778f9ceb5dae:beeper-grp-1",
+      "origin": "mock",
+      "provider_message_id": "beeper-grp-1",
+      "recipients": [
+        {
+          "network_identity": "@randy:example-matrix.test"
+        },
+        {
+          "network_identity": "@dana:example-matrix.test"
+        },
+        {
+          "network_identity": "@ravi:example-matrix.test"
+        }
+      ],
+      "reply_headers": {},
+      "retrieval_pointer": "mock://mock_beeper/chat-kestrel-group/beeper-grp-1",
+      "revision": "1",
+      "sender": {
+        "display_name": "Alex Rivera",
+        "network_identity": "@alex:example-matrix.test"
+      },
+      "source_time": "2026-10-04T11:00:00.000000Z"
+    },
+    {
+      "account_id": "acct_8620778f9ceb5dae",
+      "adapter": "mock_beeper",
+      "availability": "available",
+      "availability_reason": null,
+      "bcc": [],
+      "body_state": "fetched",
+      "cc": [],
+      "conv_id": "conv_d890d77e0e8953a6",
+      "deleted_at_source": false,
+      "minimal_metadata": {
+        "network": "example-matrix",
+        "subject": "Project Kestrel",
+        "unread": true
+      },
+      "mock_label": "MOCK:mock_beeper",
+      "msg_ref_id": "msg_404a7f507c755415",
+      "namespaced_id": "mock_beeper:acct_8620778f9ceb5dae:beeper-grp-2",
+      "origin": "mock",
+      "provider_message_id": "beeper-grp-2",
+      "recipients": [
+        {
+          "network_identity": "@randy:example-matrix.test"
+        },
+        {
+          "network_identity": "@alex:example-matrix.test"
+        },
+        {
+          "network_identity": "@ravi:example-matrix.test"
+        }
+      ],
+      "reply_headers": {},
+      "retrieval_pointer": "mock://mock_beeper/chat-kestrel-group/beeper-grp-2",
+      "revision": "1",
+      "sender": {
+        "display_name": "Dana Okafor",
+        "network_identity": "@dana:example-matrix.test"
+      },
+      "source_time": "2026-10-06T18:44:00.000000Z"
+    },
+    {
+      "account_id": "acct_8620778f9ceb5dae",
+      "adapter": "mock_beeper",
+      "availability": "partial",
+      "availability_reason": "MOCK: low-priority conversation, excluded from default search results",
+      "bcc": [],
+      "body_state": "fetched",
+      "cc": [],
+      "conv_id": "conv_7ff4904ac6675552",
+      "deleted_at_source": false,
+      "minimal_metadata": {
+        "low_priority": true,
+        "network": "example-matrix",
+        "subject": "Alert"
+      },
+      "mock_label": "MOCK:mock_beeper",
+      "msg_ref_id": "msg_1a851903ea965eb2",
+      "namespaced_id": "mock_beeper:acct_8620778f9ceb5dae:beeper-noise-1",
+      "origin": "mock",
+      "provider_message_id": "beeper-noise-1",
+      "recipients": [
+        {
+          "network_identity": "@randy:example-matrix.test"
+        }
+      ],
+      "reply_headers": {},
+      "retrieval_pointer": "mock://mock_beeper/chat-noise/beeper-noise-1",
+      "revision": "1",
+      "sender": {
+        "display_name": "Alerts",
+        "network_identity": "@noreply:example-matrix.test"
+      },
+      "source_time": "2026-10-02T06:00:00.000000Z"
+    }
+  ],
+  "people": [
+    {
+      "display_name": "Alex Rivera",
+      "person_id": "person_9664e4ce5c65524b"
+    },
+    {
+      "display_name": "Sam Patel",
+      "person_id": "person_abfabdfa359e5d73"
+    },
+    {
+      "display_name": "Sam Patel",
+      "person_id": "person_b9d9321a79fc5be7"
+    },
+    {
+      "display_name": "Ravi Menon",
+      "person_id": "person_231853f75f405bcc"
+    }
+  ],
+  "scenarios": {
+    "accepted_only": {
+      "description": "MOCK: source accepts the send locally only; reconcile cannot confirm delivery, so the receipt stays at provider_accepted.",
+      "dispatch": {
+        "code": "success",
+        "provider_status": "accepted",
+        "route_to": "as_requested"
+      },
+      "reconcile": {
+        "code": "partial",
+        "confirmed": false,
+        "limitation": "MOCK: local acceptance only; no delivery confirmation available"
+      }
+    },
+    "duplicate_tap": {
+      "description": "MOCK: source honours the idempotency key; a repeated dispatch of the same operation returns the original message id instead of sending twice.",
+      "dispatch": {
+        "code": "success",
+        "idempotent_replay": true,
+        "provider_status": "pending"
+      },
+      "reconcile": {
+        "code": "success",
+        "confirmed": true
+      }
+    },
+    "happy_pending": {
+      "by_adapter": {
+        "mock_mail": {
+          "description": "MOCK: Mail accepts the send locally only; no delivery confirmation is available, so the receipt stays at provider_accepted (T15).",
+          "dispatch": {
+            "code": "success",
+            "provider_status": "accepted",
+            "route_to": "as_requested"
+          },
+          "reconcile": {
+            "code": "partial",
+            "confirmed": false,
+            "limitation": "MOCK: Mail send was only locally accepted; delivery state cannot be confirmed"
+          }
+        }
+      },
+      "description": "MOCK: source returns a pending message id and the actual routed chat; a later reconcile call confirms the send.",
+      "dispatch": {
+        "code": "success",
+        "provider_status": "pending",
+        "route_to": "member_chat_confirmed"
+      },
+      "reconcile": {
+        "code": "success",
+        "confirmed": true
+      }
+    },
+    "permission_denied": {
+      "description": "MOCK: the account permission for the send operation was revoked.",
+      "dispatch": {
+        "code": "permission_denied",
+        "detail": "MOCK: automation permission for this account is denied"
+      },
+      "reconcile": {
+        "code": "unsupported"
+      }
+    },
+    "pre_submission_failure": {
+      "description": "MOCK: transport fails before submission. Nothing reached the source, so a retry under the same authorization is allowed.",
+      "dispatch": {
+        "code": "retryable_error",
+        "detail": "MOCK: connection refused before the request was submitted",
+        "error_category": "transient_network",
+        "submitted": false
+      },
+      "reconcile": {
+        "code": "unsupported",
+        "detail": "MOCK: nothing to reconcile"
+      }
+    },
+    "timeout_then_found": {
+      "description": "MOCK: first dispatch times out after submission; reconciliation later finds the message really was sent, so the receipt is confirmed once and only once.",
+      "dispatch": {
+        "code": "outcome_unknown",
+        "detail": "MOCK: timeout after submission \u2014 source state unknown",
+        "submitted": true
+      },
+      "reconcile": {
+        "code": "success",
+        "confirmed": true,
+        "provider_message_id": "mock-reconciled-1"
+      }
+    },
+    "timeout_uncertain": {
+      "description": "MOCK: the request timed out after submission. The outcome is unknown; the effect must enter reconciliation and must never be retried blindly.",
+      "dispatch": {
+        "code": "outcome_unknown",
+        "detail": "MOCK: timeout after submission \u2014 source state unknown",
+        "error_category": "transient_network",
+        "submitted": true
+      },
+      "reconcile": {
+        "code": "outcome_unknown",
+        "detail": "MOCK: source lookup inconclusive; operator review required"
+      }
+    }
+  }
+}
