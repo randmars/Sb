@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="no-referrer">
+<title>Switchboard — Grace review client</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="topbar-row">
+    <h1>Switchboard</h1>
+    <p class="sub" id="service-status" role="status" aria-live="polite">Connecting to Grace…</p>
+  </div>
+  <div id="mock-banner" class="mock-banner" role="note" hidden></div>
+  <div id="health-banner" class="health-banner" role="alert" hidden></div>
+  <nav class="tabs" aria-label="Surfaces">
+    <a class="tab" href="#/needs" data-tab="needs" aria-label="Needs me">
+      <span class="tab-label">Needs me</span><span class="badge" id="count-needs" aria-hidden="true">–</span>
+    </a>
+    <a class="tab" href="#/working" data-tab="working" aria-label="Working">
+      <span class="tab-label">Working</span><span class="badge" id="count-working" aria-hidden="true">–</span>
+    </a>
+    <a class="tab" href="#/all" data-tab="all" aria-label="All conversations">
+      <span class="tab-label">All</span><span class="badge" id="count-all" aria-hidden="true">–</span>
+    </a>
+    <a class="tab" href="#/rules" data-tab="rules" aria-label="Rules and source health">
+      <span class="tab-label">Rules &amp; health</span><span class="badge" id="count-sources" aria-hidden="true">–</span>
+    </a>
+  </nav>
+</header>
+
+<main id="main" tabindex="-1">
+  <p class="loading" id="loading">Loading…</p>
+  <div id="view" aria-live="polite"></div>
+</main>
+
+<footer class="footer">
+  <p><strong>Mocks are labelled.</strong> This deployment has no Mail, Beeper, Contacts or Hermes
+  connection. <code>verified_against_real_source = false</code> for every receipt.</p>
+  <p class="tiny">Gate 1 contracts and prototype · PRD v1.0 §5, §10 · nothing here has been
+  exercised against a real source.</p>
+</footer>
+
+<div id="toast" class="toast" role="status" aria-live="assertive" hidden></div>
+
+<script src="/app.js"></script>
+</body>
+</html>

@@ -217,6 +217,29 @@ def _build_parser() -> argparse.ArgumentParser:
     dm = sub.add_parser("demo", help="walk instruction -> job -> draft -> approval -> mock "
                                      "dispatch -> reconciled receipt")
     dm.add_argument("--include-mail-leg", action="store_true", default=True)
+
+    sv = sub.add_parser("serve", help="serve the authenticated Gate 1 review client (PRD §5 "
+                                      "surfaces) over HTTP")
+    sv.add_argument("--host", default="127.0.0.1",
+                    help="bind address (default 127.0.0.1: reachable from this computer only; "
+                         "use 0.0.0.0 to reach it from Randy's phone on the same network)")
+    sv.add_argument("--port", type=int, default=8088)
+    sv.add_argument("--token", default=None,
+                    help="owner token, 16+ characters. Falls back to $SWITCHBOARD_WEB_TOKEN. There "
+                         "is no unauthenticated mode: without a token the server refuses to start.")
+    sv.add_argument("--print-url", action="store_true",
+                    help="print the one-time landing URL including the token. Sensitive: it appears "
+                         "in your terminal scrollback; the token is never logged by the server.")
+
+    # `--pretty` is accepted in both positions. Argparse would otherwise reject the flag
+    # after the subcommand, because the top-level parser owns it (README documented the
+    # after-subcommand form, which exited 2). default=SUPPRESS keeps the top-level value
+    # when the flag is not repeated after the subcommand.
+    for sub_parser in {id(p): p for p in sub.choices.values()}.values():
+        if any(a.dest == "pretty" for a in sub_parser._actions):
+            continue
+        sub_parser.add_argument("--pretty", action="store_true", default=argparse.SUPPRESS,
+                                help="indent the JSON output (also accepted before the subcommand)")
     return p
 
 
@@ -232,7 +255,7 @@ def _job_brief(job: dict) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    pretty = args.pretty
+    pretty = bool(getattr(args, "pretty", False))
     cmd = args.cmd
     if cmd == "scenarios":
         from .fixtures import SCENARIOS
@@ -241,6 +264,10 @@ def main(argv: list[str] | None = None) -> int:
                                       for k, v in sorted(SCENARIOS.items())},
                           mocked=True, label=C.mock_label("scenarios"),
                           message="labelled mock scenarios"), pretty)
+    if cmd == "serve":
+        # Not a one-shot command: it blocks, and it owns its own database connection
+        # inside the serving thread, so no service is opened here.
+        return _serve(args, pretty)
     svc = _svc(args)
     _STORE_CONTEXT["has_mock_source"] = bool(svc.store.scalar(
         "SELECT COUNT(*) FROM source_account WHERE origin = 'mock'"))
@@ -453,7 +480,68 @@ def _dispatch(svc: Grace, args: argparse.Namespace, cmd: str, pretty: bool) -> i
     return _print(emit(cmd, ok=False, message=f"unhandled command {cmd}"), pretty)
 
 
-# --------------------------------------------------------------------- demo ----
+# --------------------------------------------------------------------- serve ---
+
+TOKEN_ENV = "SWITCHBOARD_WEB_TOKEN"
+MIN_TOKEN_LENGTH = 16
+
+
+def _serve(args: argparse.Namespace, pretty: bool) -> int:
+    """Serve the authenticated review client. Refuses to start without a token."""
+    import os
+
+    from .web import WebApp
+
+    token = args.token or os.environ.get(TOKEN_ENV) or ""
+    if len(token) < MIN_TOKEN_LENGTH:
+        payload = emit("serve", ok=False, mocked=False,
+                       message=("refusing to start: this surface has no unauthenticated mode. Pass "
+                                f"--token <16+ characters> or set ${TOKEN_ENV}."),
+                       data={"token_required": True, "min_length": MIN_TOKEN_LENGTH,
+                             "env_var": TOKEN_ENV})
+        _print(payload, pretty)
+        return 2
+    try:
+        app = WebApp(args.db, token, host=args.host, port=args.port,
+                     scenario=args.scenario, faults=args.fault)
+    except (OSError, ValueError) as exc:
+        _print(emit("serve", ok=False, mocked=False, message=str(exc)), pretty)
+        return 2
+    url = app.base_url() + "/"
+    landing = url + "?token=" + token
+    payload = emit("serve", mocked=True, label=C.mock_label("web"),
+                   message="serving the Gate 1 review client on labelled mocks",
+                   data={
+                       "url": url,
+                       "host": args.host,
+                       "port": app.port,
+                       "db": app.db_path,
+                       "scenario": app.scenario,
+                       "faults": sorted(app.faults),
+                       "landing_url": landing if args.print_url else None,
+                       "token_redacted": not args.print_url,
+                       "auth": ("every path — including / and the assets — requires the owner token; "
+                                "an unauthenticated request gets 401 with no data and the token is "
+                                "never logged"),
+                       "how_to_open": ("append ?token=<your token> to the URL on your phone, once. "
+                                       "The client trades it for an HttpOnly session cookie and "
+                                       "removes it from the address bar."
+                                       if not args.print_url else
+                                       "open the landing_url below; it carries the token once and "
+                                       "the client then removes it from the address bar"),
+                       "reach_from_phone": (f"mocked surfaces only. To reach this from Randy's phone, "
+                                            f"both devices must be on the same network and the "
+                                            f"server must bind {args.host}. Nothing in this "
+                                            f"deployment has been exercised against a real source."),
+                   })
+    _print(payload, pretty)
+    try:
+        app.serve()
+    except KeyboardInterrupt:
+        return 0
+    return 0
+
+
 
 
 def _demo(svc: Grace, *, include_mail_leg: bool = True) -> dict:
