@@ -157,7 +157,11 @@ def run_loop(adapter, *, account: Optional[str] = None, mailbox: Optional[str] =
                  "once": once, "state_path": store.path,
                  "adapter": adapter.name, "adapter_version": adapter.version,
                  "origin": adapter.origin,
-                 "real_source_connected": adapter.origin == O.REAL,
+                 "adapter_is_real": bool(getattr(adapter, "adapter_is_real", False)),
+                 # Nothing has been read yet at this point, so this is false by
+                 # construction: each poll document below carries its own value.
+                 "real_source_connected": False,
+                 "source_contacted": False,
                  "note": ("foreground loop; launchd-shaped (no fork, no daemon). Reads "
                           "only — this worker holds no send path.")})
 

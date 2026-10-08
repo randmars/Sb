@@ -323,8 +323,14 @@ class TestRealHostBehaviour(unittest.TestCase):
         self.assertEqual(out.code, O.UNSUPPORTED)
         self.assertEqual(out.reason, "host_not_macos")
         self.assertEqual(out.origin, O.REAL)
-        self.assertTrue(out.to_dict()["real_source_connected"])
-        self.assertFalse(out.to_dict()["fixture_mode"])
+        # The real adapter is selected, but nothing was contacted: no osascript ran, no
+        # mailbox was read. `real_source_connected` must not be overloaded to mean "this
+        # is the real adapter" (it means "a real source was contacted", everywhere).
+        payload = out.to_dict()
+        self.assertTrue(payload["adapter_is_real"])
+        self.assertFalse(payload["source_contacted"])
+        self.assertFalse(payload["real_source_connected"])
+        self.assertFalse(payload["fixture_mode"])
         self.assertIn("linux", out.detail)
 
     def test_the_fixture_path_is_never_reported_as_real(self) -> None:

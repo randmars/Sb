@@ -9,13 +9,38 @@ two vocabularies have not drifted apart.
 Labelling rule (never optional). Every value the worker emits carries an explicit
 ``origin``:
 
-* ``real``    -- produced by this run, against Mail.app on this Mac. Only the code
-                 path that actually invoked ``osascript`` against the real
-                 application may set it.
+* ``real``    -- answered by the *real* adapter rather than by a recorded fixture. It
+                 says which twin answered; it is **not** a claim that Mail was
+                 contacted. A real adapter on a host with no Mail (this Linux computer,
+                 or a Mac where automation was refused) is still ``origin: real`` while
+                 nothing was read.
 * ``fixture`` -- answered from a recorded result shipped in this repository
                  (``--fixture-mode``) or supplied by a test. It always carries a
                  ``FIXTURE:`` label and a disclaimer, and always reports
                  ``real_source_connected: false``.
+
+Two further fields keep the provenance honest, and they are deliberately separate:
+
+* ``adapter_is_real`` -- the adapter behind this document is the real one (AppleScript
+  against Mail.app) rather than a fixture twin. This is the meaning ``origin`` alone used
+  to be asked to carry.
+* ``source_contacted`` -- this run actually obtained *this* result from the source. Set
+  only by the transport that performed the read; a fixture twin, a refusal that never
+  reached the source (``host_not_macos``, no ``osascript``), and a command that contacts
+  nothing (``manifest``) all leave it false.
+* ``real_source_connected`` (derived, never set directly) -- ``adapter_is_real and
+  source_contacted``. It means "a real source was contacted and this value came from it",
+  which is the same meaning Grace's health output, the receipts and the mock-labelling
+  rules give it. It is false whenever no source was contacted, on every command, in both
+  modes.
+
+Serialization is not optional either: every document this module hands to ``emit`` is
+validated, and a document that is not JSON-safe raises :class:`SerializationError` naming
+the offending key path instead of letting ``json.dumps`` fail somewhere in the caller.
+(That check exists because of a real defect: a dataclass field whose name was shadowed by
+a constructor of the same name silently became a *bound method* on every instance, and
+``accounts``/``health``/``run`` printed a ``TypeError`` traceback instead of a document.
+See the note on ``is_partial`` below.)
 
 Nothing in this worker is a live mock adapter: a fixture read is a synthetic
 recording, and it says so in every document it produces.
@@ -160,10 +185,21 @@ class Outcome:
     adapter: Optional[str] = None
     account_id: Optional[str] = None
     submitted: bool = False
-    partial: bool = False
+    # NOTE (defect fix, 2026-10-08): this field is ``is_partial`` and NOT ``partial``.
+    # The class also exposes a ``partial()`` constructor, and a dataclass field whose name
+    # is shadowed by a later class attribute takes that attribute as its *default* -- so
+    # every instance that did not pass ``partial=`` explicitly carried a bound method in
+    # this field, and ``to_dict()``/``emit()`` blew up with
+    # "TypeError: Object of type method is not JSON serializable". That is what made
+    # `accounts`, `health` and `run` crash on every platform. Keep the two names distinct.
+    # The JSON key stays ``partial`` for consumers (Grace reads it).
+    is_partial: bool = False
     retry_after: Optional[str] = None
     next_action: Optional[str] = None
     duration_ms: Optional[int] = None
+    # Provenance, kept deliberately separate -- see the module docstring.
+    adapter_is_real: bool = False      # the real adapter answered, not a fixture twin
+    source_contacted: bool = False     # this run actually read this value from the source
 
     # -- constructors ------------------------------------------------------
     @classmethod
@@ -172,7 +208,7 @@ class Outcome:
 
     @classmethod
     def partial(cls, data: dict, detail: str, **kw: Any) -> "Outcome":
-        return cls(PARTIAL, data=data, detail=detail, partial=True, **kw)
+        return cls(PARTIAL, data=data, detail=detail, is_partial=True, **kw)
 
     @classmethod
     def unsupported(cls, detail: str, **kw: Any) -> "Outcome":
@@ -214,7 +250,22 @@ class Outcome:
 
     @property
     def is_real(self) -> bool:
+        """The real adapter answered (as opposed to a fixture twin).
+
+        This is *not* "a real source was contacted": see ``real_source_connected``.
+        """
         return self.origin == REAL
+
+    @property
+    def real_source_connected(self) -> bool:
+        """True only when this document carries usable data read from the real source.
+
+        All three parts matter: the real adapter answered, this run actually reached the
+        source, and the document is a usable read (success or partial). A refusal over a
+        connection that exists (permission denied, offline, a timeout) is therefore still
+        false -- it carries no source value.
+        """
+        return bool(self.adapter_is_real and self.source_contacted and self.usable)
 
     @property
     def retryable_as_read(self) -> bool:
@@ -226,12 +277,14 @@ class Outcome:
             "detail": self.detail,
             "reason": self.reason,
             "submitted": self.submitted,
-            "partial": self.partial,
+            "partial": bool(self.is_partial),
             "data": self.data,
             "adapter": self.adapter,
             "account_id": self.account_id,
             "origin": self.origin,
-            "real_source_connected": self.is_real,
+            "adapter_is_real": bool(self.adapter_is_real),
+            "source_contacted": bool(self.source_contacted),
+            "real_source_connected": self.real_source_connected,
             "fixture_mode": not self.is_real,
             "retry_after": self.retry_after,
             "next_action": self.next_action,
@@ -251,8 +304,55 @@ class Outcome:
 # ------------------------------------------------------------------ reporting ---
 
 
+class SerializationError(ValueError):
+    """A document that is not well-formed JSON, reported as a typed failure.
+
+    Carries the offending key paths so the caller can say *where* the document went
+    wrong without printing a stack trace or inventing a value.
+    """
+
+    def __init__(self, paths):
+        self.paths = list(paths)
+        super().__init__(
+            "document is not JSON-serialisable at: " + ", ".join(self.paths))
+
+
+def json_problem_paths(value, path: str = "$", out=None) -> list:
+    """Every path in ``value`` that ``json.dumps`` could not serialise.
+
+    Types that JSON cannot express (a bound method, a set, a datetime) are recorded
+    instead of raised on, so the failure message can name all of them at once.
+    """
+    if out is None:
+        out = []
+    if value is None or isinstance(value, (str, bool, int)):
+        return out
+    if isinstance(value, float):
+        return out
+    if isinstance(value, list) or isinstance(value, tuple):
+        for i, item in enumerate(value):
+            json_problem_paths(item, f"{path}[{i}]", out)
+        return out
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                out.append(f"{path}.<key {key!r}>")
+            json_problem_paths(item, f"{path}.{key}", out)
+        return out
+    out.append(f"{path} ({type(value).__name__})")
+    return out
+
+
 def emit(document: dict, *, pretty: bool = False) -> str:
-    """Canonical JSON. Keys sorted so two runs are diffable."""
+    """Canonical JSON. Keys sorted so two runs are diffable.
+
+    Validated first: a document that is not JSON-safe raises
+    :class:`SerializationError` naming the offending paths, so the worker reports the
+    defect as a typed failure instead of dying with a ``TypeError`` traceback.
+    """
+    problems = json_problem_paths(document)
+    if problems:
+        raise SerializationError(problems)
     if pretty:
         return json.dumps(document, sort_keys=True, indent=2, ensure_ascii=False)
     return json.dumps(document, sort_keys=True, ensure_ascii=False)

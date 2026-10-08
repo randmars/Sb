@@ -28,6 +28,7 @@ Honesty notes that the probe and the README repeat:
 from __future__ import annotations
 
 import abc
+import functools
 import json
 import os
 import subprocess
@@ -43,6 +44,26 @@ MAIL_BUNDLE_CANDIDATES = (
     "/Applications/Mail.app",
 )
 DEFAULT_MAX_SCAN = 2000
+
+
+def _stamp_real_contact(method):
+    """Carry Mail's provenance onto an outcome derived from a usable run.
+
+    A read method returns either the typed refusal that stopped it (nothing was read, so
+    the outcome is not usable and keeps its own provenance) or an outcome derived from a
+    run that really did reach Mail. This stamps the second case, so no call site has to
+    remember to, and ``real_source_connected`` is true for exactly those documents that
+    carry data read from the real source in this run.
+    """
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        outcome = method(self, *args, **kwargs)
+        if isinstance(outcome, O.Outcome) and outcome.usable:
+            outcome.adapter_is_real = True
+            outcome.source_contacted = True
+        return outcome
+    return wrapper
+
 
 
 # ------------------------------------------------------------- applescript text --
@@ -304,7 +325,13 @@ def parse_date_parts(year: str, month: str, day: str, hour: str, minute: str,
 class MailTransport(abc.ABC):
     """One method per Mail operation the worker performs. All return ``Outcome``."""
 
+    # ``origin`` is the labelling axis (``real`` = the real adapter answered, not a
+    # recorded fixture). ``adapter_is_real`` is the provenance field consumers read;
+    # neither of them means "Mail was contacted" -- the transport sets
+    # ``Outcome.source_contacted`` only when it really read something. See
+    # ``outcomes.py``.
     origin = O.REAL
+    adapter_is_real = False
 
     def __init__(self, *, adapter: str = "mail", account_id: Optional[str] = None):
         self.adapter = adapter
@@ -347,6 +374,7 @@ class AppleScriptMailTransport(MailTransport):
     """Read-only Mail.app access through AppleScript."""
 
     origin = O.REAL
+    adapter_is_real = True
 
     def __init__(self, *, runner: Optional[ScriptRunner] = None, adapter: str = "mail",
                  account_id: Optional[str] = None, timeout_s: int = 120,
@@ -376,9 +404,20 @@ class AppleScriptMailTransport(MailTransport):
     def _run(self, script: str, kind: str) -> O.Outcome:
         blocked = self._host_supported()
         if blocked is not None:
+            # Nothing ran: the host refused before osascript was invoked. This is exactly
+            # the case that used to be reported as `real_source_connected: true`.
+            blocked.adapter_is_real = True
+            blocked.source_contacted = False
             return blocked
         result = self.runner.run(script, script_kind=kind, timeout_s=self.timeout_s)
-        return classify(result, adapter=self.adapter, account_id=self.account_id)
+        outcome = classify(result, adapter=self.adapter, account_id=self.account_id)
+        # The script really ran on this Mac, but a classification carries a value from
+        # Mail only when the call succeeded or returned usable data; a refusal
+        # (permission denied, offline, timeout, unclassified error) means no source value
+        # was obtained and stays honest as source_contacted=False.
+        outcome.adapter_is_real = True
+        outcome.source_contacted = bool(outcome.usable)
+        return outcome
 
     def mail_bundle(self) -> dict:
         """Mail.app's version, read from its bundle. This does not launch Mail."""
@@ -402,6 +441,8 @@ class AppleScriptMailTransport(MailTransport):
     def identity(self) -> O.Outcome:
         blocked = self._host_supported()
         if blocked is not None:
+            blocked.adapter_is_real = True
+            blocked.source_contacted = False
             return blocked
         bundle = self.mail_bundle()
         running = self._run("application \"Mail\" is running", "is_running")
@@ -415,20 +456,32 @@ class AppleScriptMailTransport(MailTransport):
         }
         if not running.usable:
             data["running_check_outcome"] = running.code
-            return O.Outcome.permanent(
+            return self._stamped(O.Outcome.permanent(
                 "could not determine whether Mail is running: " + (running.detail or ""),
                 reason=running.reason or "identity_probe_failed", adapter=self.adapter,
                 account_id=self.account_id, data=data,
-                duration_ms=running.duration_ms)
+                duration_ms=running.duration_ms), contacted=False)
         if not bundle["info_plist_version"]:
-            return O.Outcome.partial(
+            return self._stamped(O.Outcome.partial(
                 data, "Mail.app's bundle version could not be read; the observed version "
                       "of the installed build is unknown",
                 reason="version_unread", adapter=self.adapter,
-                account_id=self.account_id, duration_ms=running.duration_ms)
-        return O.Outcome.ok(data, adapter=self.adapter, account_id=self.account_id,
-                            duration_ms=running.duration_ms)
+                account_id=self.account_id, duration_ms=running.duration_ms),
+                contacted=True)
+        return self._stamped(O.Outcome.ok(data, adapter=self.adapter,
+                                          account_id=self.account_id,
+                                          duration_ms=running.duration_ms),
+                             contacted=True)
 
+    @staticmethod
+    def _stamped(outcome: O.Outcome, *, contacted: bool) -> O.Outcome:
+        """Stamp the provenance of an outcome this transport built itself."""
+        outcome.adapter_is_real = True
+        outcome.source_contacted = bool(contacted)
+        return outcome
+
+
+    @_stamp_real_contact
     def accounts(self) -> O.Outcome:
         out = self._run(script_accounts(), "accounts")
         if not out.usable:
@@ -453,6 +506,7 @@ class AppleScriptMailTransport(MailTransport):
                         "which is Randy's call to record."),
         }, adapter=self.adapter, account_id=self.account_id, duration_ms=out.duration_ms)
 
+    @_stamp_real_contact
     def mailboxes(self, account: str) -> O.Outcome:
         out = self._run(script_mailboxes(account), "mailboxes")
         if not out.usable:
@@ -470,6 +524,7 @@ class AppleScriptMailTransport(MailTransport):
                             adapter=self.adapter, account_id=self.account_id,
                             duration_ms=out.duration_ms)
 
+    @_stamp_real_contact
     def message_ids(self, account: str, mailbox: str, *,
                     max_scan: int = DEFAULT_MAX_SCAN) -> O.Outcome:
         out = self._run(script_message_ids(account, mailbox, max_scan), "message_ids")
@@ -516,6 +571,7 @@ class AppleScriptMailTransport(MailTransport):
         return O.Outcome.ok(data, adapter=self.adapter, account_id=self.account_id,
                             duration_ms=out.duration_ms)
 
+    @_stamp_real_contact
     def message_window(self, account: str, mailbox: str, *, start: int,
                        end: int) -> O.Outcome:
         out = self._run(script_message_window(account, mailbox, start, end),
@@ -555,6 +611,7 @@ class AppleScriptMailTransport(MailTransport):
                             adapter=self.adapter, account_id=self.account_id,
                             duration_ms=out.duration_ms)
 
+    @_stamp_real_contact
     def message_body(self, account: str, mailbox: str, *, index: int) -> O.Outcome:
         out = self._run(script_message_body(account, mailbox, index), "message_body")
         if not out.usable:
@@ -575,6 +632,7 @@ class AppleScriptMailTransport(MailTransport):
             "body_fingerprint": O.fingerprint(text),
         }, adapter=self.adapter, account_id=self.account_id, duration_ms=out.duration_ms)
 
+    @_stamp_real_contact
     def message_source(self, account: str, mailbox: str, *, index: int) -> O.Outcome:
         out = self._run(script_message_source(account, mailbox, index), "message_source")
         if not out.usable:
@@ -592,6 +650,7 @@ class AppleScriptMailTransport(MailTransport):
             "source_fingerprint": O.fingerprint(text),
         }, adapter=self.adapter, account_id=self.account_id, duration_ms=out.duration_ms)
 
+    @_stamp_real_contact
     def attachments(self, account: str, mailbox: str, *, index: int) -> O.Outcome:
         out = self._run(script_attachments(account, mailbox, index), "attachments")
         if not out.usable:
@@ -651,6 +710,7 @@ class RecordedMailTransport(MailTransport):
     """Answers the Mail interface from a recorded result. Never touches Mail."""
 
     origin = O.FIXTURE
+    adapter_is_real = False                    # a recorded answer is not the real adapter
 
     def __init__(self, fixture: dict, *, adapter: str = "mail",
                  account_id: Optional[str] = None):
@@ -666,6 +726,10 @@ class RecordedMailTransport(MailTransport):
         outcome.adapter = self.adapter
         outcome.origin = O.FIXTURE
         outcome.label = self.label
+        # A recorded answer contacted nothing and carries no source value, whatever the
+        # fixture file happens to say.
+        outcome.adapter_is_real = False
+        outcome.source_contacted = False
         return outcome
 
     def _faulted(self, operation: str) -> Optional[O.Outcome]:

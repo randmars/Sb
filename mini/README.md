@@ -232,3 +232,28 @@ distinction, and that every mutating operation is `unsupported`.
 | `unclassified_automation_error` | read `evidence.ae_code` and the raw stderr in `evidence`, add the code to `AE_ERROR_MAP` with that evidence |
 | cursor looks wrong | delete the scope entry in the state file; the next poll starts from the beginning and re-reading is idempotent |
 | the state file is corrupt | the worker treats it as empty and starts over; it never half-writes (temp file + `os.replace`) |
+
+## Provenance vocabulary (correction, 2026-10-08)
+
+Two different claims, two different fields -- do not conflate them:
+
+* `adapter_is_real` -- *which adapter answered*: the real one (`true`) or its recorded
+  fixture twin (`false`). On this Linux computer the real adapter is selected and can
+  read nothing, so real-mode documents legitimately carry `adapter_is_real: true`.
+* `real_source_connected` -- *whether a real source was contacted and the reported value
+  came from it*. Same meaning as everywhere else in the product (Grace's health output,
+  receipts, the mock-labelling rules). It is `false` on every command, in both modes,
+  whenever no source was actually read -- which is always, on this computer.
+
+Before this correction the manifest overloaded `real_source_connected` to mean "this is
+the real adapter", so `manifest` in real mode claimed `real_source_connected: true` on a
+host where Mail was never contacted. That claim is withdrawn. The probe rows and the
+manifest now carry both fields with the meanings above.
+
+Also: the global flags (`--fixture-mode`, `--fixture-scenario`, `--pretty`,
+`--summary-to-stderr`) may be given **before or after** the subcommand -- `probe
+--fixture-mode` and `--fixture-mode probe` mean the same thing. A flag given before the
+subcommand is never reset by the subcommand parser, and a test covers both positions.
+
+If any command cannot describe itself, it prints a typed `harness_failure` document on
+stdout with exit 3 -- never a stack trace.

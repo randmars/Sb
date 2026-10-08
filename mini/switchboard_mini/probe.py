@@ -43,8 +43,8 @@ from .version import PROBE_CONTRACT_VERSION, WORKER_VERSION
 ROW_FIELDS = ("capability", "supported", "permission_state", "observed_version",
               "probe_method", "probe_assertion", "limitation", "evidence")
 ROW_LABELLING_FIELDS = ("state", "origin", "label", "disclaimer", "probed_at",
-                        "title", "values_from_source", "real_source_connected",
-                        "probe_contract_version")
+                        "title", "values_from_source", "adapter_is_real",
+                        "real_source_connected", "probe_contract_version")
 
 
 @dataclass(frozen=True)
@@ -208,6 +208,9 @@ class ProbeContext:
         self.sample = max(1, int(sample))
         self.max_scan = max_scan
         self.origin = adapter.origin
+        # The provenance of the adapter itself, read once: a fixture twin can never make a
+        # row claim a real source, whatever the fixture file says.
+        self.adapter_is_real = bool(getattr(adapter, "adapter_is_real", False))
         self.label = getattr(adapter, "_label", lambda: None)()
         self._account_arg = account
         self._mailbox_arg = mailbox
@@ -338,21 +341,27 @@ def _row(context: ProbeContext, capability: Capability, *, supported: bool, stat
         "origin": context.origin,
         "probed_at": O.now(),
         "probe_contract_version": PROBE_CONTRACT_VERSION,
-        # ``origin='real'`` means "this row was produced by a real probe on this host";
-        # it does not mean a mailbox was read. This field does: it is true only when the
-        # capability answered with data (success or partial) rather than with a typed
-        # refusal or a state about the source.
+        # ``adapter_is_real``: the real adapter (not a fixture twin) produced this row.
+        # ``values_from_source``: the capability answered with data (success or partial)
+        # rather than with a typed refusal or a state about the source.
+        # ``real_source_connected``: both -- the meaning this field has everywhere else in
+        # the product ("a real source was contacted and this value came from it"). On this
+        # Linux computer the real adapter answers every row with a typed refusal, so every
+        # row is false; only a real probe on a Mac can make it true.
+        "adapter_is_real": bool(context.adapter_is_real),
         "values_from_source": (state in (O.SUCCESS, O.PARTIAL)
-                               if values_from_source is None else bool(values_from_source)),
+                               if values_from_source is None
+                               else bool(values_from_source)),
+        "real_source_connected": bool(context.adapter_is_real and (
+            state in (O.SUCCESS, O.PARTIAL)
+            if values_from_source is None else bool(values_from_source))),
     }
     if context.origin != O.REAL:
         row["label"] = context.label or O.fixture_label("mail")
         row["disclaimer"] = O.FIXTURE_DISCLAIMER
-        row["real_source_connected"] = False
     else:
         row["label"] = None
         row["disclaimer"] = None
-        row["real_source_connected"] = True
     return row
 
 

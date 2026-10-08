@@ -168,7 +168,14 @@ class Outcome:
     adapter: Optional[str] = None
     account_id: Optional[str] = None
     submitted: bool = False                # may a side effect already have reached the source?
-    partial: bool = False
+    # NOTE (defect fix, 2026-10-08): this field is ``is_partial`` and NOT ``partial``,
+    # for the same reason as in ``mini/switchboard_mini/outcomes.py``. A dataclass field
+    # whose name is later shadowed by the ``partial()`` constructor takes that method as
+    # its default, so ``to_dict()`` handed a bound method to json.dumps and every
+    # serialisation of a non-partial Outcome raised
+    # "TypeError: Object of type method is not JSON serializable".
+    # The JSON key stays ``partial`` for consumers.
+    is_partial: bool = False
     retry_after: Optional[str] = None
     next_action: Optional[str] = None
 
@@ -179,7 +186,7 @@ class Outcome:
 
     @classmethod
     def partial(cls, data: dict, detail: str, **kw: Any) -> "Outcome":
-        return cls(PARTIAL, data=data, detail=detail, partial=True, **kw)
+        return cls(PARTIAL, data=data, detail=detail, is_partial=True, **kw)
 
     @classmethod
     def unsupported(cls, detail: str, **kw: Any) -> "Outcome":
@@ -233,7 +240,7 @@ class Outcome:
             "detail": self.detail,
             "reason": self.reason,
             "submitted": self.submitted,
-            "partial": self.partial,
+            "partial": bool(self.is_partial),
             "data": self.data,
             "adapter": self.adapter,
             "account_id": self.account_id,

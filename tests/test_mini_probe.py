@@ -9,6 +9,7 @@ for a measurement of Randy's machine.
 from __future__ import annotations
 
 import json
+import sys
 import unittest
 
 from switchboard_mini import outcomes as O
@@ -227,6 +228,71 @@ class TestProbeHarnessFailure(unittest.TestCase):
             self.assertFalse(row["supported"])
             self.assertFalse(row["values_from_source"])
             self.assertIn("RuntimeError", row["limitation"])
+
+
+class TestProvenanceHonesty(unittest.TestCase):
+    """`adapter_is_real` and `real_source_connected` are two different claims.
+
+    `real_source_connected` means "a real source was contacted and this value came from
+    it" -- the meaning it has in Grace's health output, in every receipt and in the
+    mock-labelling rules. It must never be overloaded to mean "this is the real adapter
+    rather than a fixture twin"; that is `adapter_is_real`. On this Linux computer the
+    real adapter is selected and can read nothing, so both modes here must report
+    `real_source_connected: false` on every row.
+    """
+
+    def test_fixture_rows_report_neither(self) -> None:
+        for scenario in ("granted", "permission_denied", "offline", "partial_history"):
+            for row in probe_rows(scenario):
+                self.assertFalse(row["adapter_is_real"], row["capability"])
+                self.assertFalse(row["real_source_connected"], row["capability"])
+                self.assertEqual(row["origin"], O.FIXTURE)
+
+    def test_real_adapter_rows_claim_no_source_on_a_host_without_mail(self) -> None:
+        if sys.platform == "darwin":     # pragma: no cover - this computer is Linux
+            self.skipTest("this computer is the Linux stand-in for Grace")
+        adapter = build_adapter(fixture_mode=False)
+        run = run_probe(adapter)
+        self.assertTrue(run.ok, run.harness_errors)
+        for row in run.rows:
+            self.assertTrue(row["adapter_is_real"], row["capability"])
+            self.assertFalse(row["real_source_connected"], row["capability"])
+            self.assertFalse(row["values_from_source"], row["capability"])
+            if row["capability"] == "manifest":
+                # the manifest row describes the worker itself, so it may be supported.
+                # It is still not a source value, so it claims no contact either.
+                self.assertTrue(row["supported"])
+                continue
+            self.assertFalse(row["supported"], row["capability"])
+            self.assertEqual(row["state"], O.UNSUPPORTED)
+            if row["capability"] in ("attachment_materialization", "draft_preparation",
+                                     "authorized_send", "send_reconciliation"):
+                # a deliberate absence in this slice, with its own reason
+                self.assertIn(row["evidence"]["reason"],
+                              ("read_only_slice_1", "materialize_not_implemented"))
+                continue
+            # every capability that needs Mail refused at the host, not at Mail
+            self.assertEqual(row["evidence"]["reason"], "host_not_macos")
+        # the real adapter answered every row and read nothing: that is the whole point
+        self.assertNotIn(True, [r["real_source_connected"] for r in run.rows])
+
+    def test_a_usable_read_is_what_earns_the_claim(self) -> None:
+        """A row that carries source data is the only row that may set the flag."""
+        adapter = build_adapter(fixture_mode=True, fixture_scenario="granted")
+        rows = run_probe(adapter).rows
+        for row in rows:
+            expected = bool(row["adapter_is_real"] and row["values_from_source"])
+            self.assertEqual(row["real_source_connected"], expected, row["capability"])
+
+    def test_the_manifest_never_claims_a_contact_it_did_not_make(self) -> None:
+        for fixture_mode in (True, False):
+            adapter = build_adapter(fixture_mode=fixture_mode)
+            manifest = adapter.manifest(probe_rows())
+            self.assertEqual(manifest["real_source_connected"], False, fixture_mode)
+            self.assertEqual(manifest["source_contacted"], False, fixture_mode)
+            self.assertEqual(manifest["adapter_is_real"], not fixture_mode)
+            self.assertEqual(manifest["folded_probe_rows"]["any_from_real_source"], False)
+            json.dumps(manifest)
 
 
 class TestCapabilityDeclaration(unittest.TestCase):

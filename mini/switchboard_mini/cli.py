@@ -14,11 +14,13 @@ recorded results in this repository and labels every document ``FIXTURE:``.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from typing import Optional
 
 from . import outcomes as O
 from .mail_adapter import build_adapter
+from .mail_transport import FIXTURE_SCENARIOS
 from .probe import CAPABILITY_NAMES, run_probe
 from .runloop import default_state_path, run_loop
 from .version import PROBE_CONTRACT_VERSION, WORKER_VERSION
@@ -37,6 +39,75 @@ def _line(document: dict) -> None:
     sys.stdout.write(O.emit(document) + "\n")
 
 
+def _add_global_flags_to_subparsers(sub) -> None:
+    """Accept the global flags after the subcommand as well as before it.
+
+    Argparse rejects `probe --fixture-mode` when the top-level parser owns the flag --
+    the same ordering quirk that made the documented `grace demo --pretty` exit 2. The
+    runbook must not trip Randy on it, so every subcommand takes them too.
+    ``default=argparse.SUPPRESS`` is what keeps this honest: the subparser only sets the
+    attribute when the flag is actually present after the subcommand, so a flag written
+    before the subcommand still applies when it is not repeated.
+    """
+    for sub_parser in {id(p): p for p in sub.choices.values()}.values():
+        existing = {a.dest for a in sub_parser._actions}
+        if "fixture_mode" not in existing:
+            sub_parser.add_argument("--fixture-mode", action="store_true",
+                                    default=argparse.SUPPRESS,
+                                    help="answer from recorded results (also accepted "
+                                         "before the subcommand)")
+        if "fixture_scenario" not in existing:
+            sub_parser.add_argument("--fixture-scenario", default=argparse.SUPPRESS,
+                                    choices=list(FIXTURE_SCENARIOS),
+                                    help="which recorded result to answer from (also "
+                                         "accepted before the subcommand)")
+        if "max_scan" not in existing:
+            sub_parser.add_argument("--max-scan", type=int, default=argparse.SUPPRESS,
+                                    help="bounded id-scan window per mailbox (also "
+                                         "accepted before the subcommand)")
+        if "timeout" not in existing:
+            sub_parser.add_argument("--timeout", type=int, default=argparse.SUPPRESS,
+                                    help="osascript timeout in seconds (also accepted "
+                                         "before the subcommand)")
+        if "pretty" not in existing:
+            sub_parser.add_argument("--pretty", action="store_true",
+                                    default=argparse.SUPPRESS,
+                                    help="indent JSON output (also accepted before the "
+                                         "subcommand)")
+
+
+def harness_failure_document(command: str, exc: BaseException, *,
+                             fixture_mode: bool = False) -> dict:
+    """A typed document for a failure that should never happen -- never a traceback.
+
+    The worker answers with typed states, so an unexpected exception is itself a
+    documented outcome: it says the run is void and no source value is claimed. It must
+    not be silently retried or built on.
+    """
+    paths = getattr(exc, "paths", None)
+    serialisation = isinstance(exc, O.SerializationError)
+    return {
+        "event": "harness_failure",
+        "command": command,
+        "state": "harness_error",
+        "reason": "document_not_serialisable" if serialisation else "unexpected_exception",
+        "failure_type": type(exc).__name__,
+        "detail": str(exc),
+        "unserialisable_paths": list(paths) if paths else None,
+        "origin": O.FIXTURE if fixture_mode else O.REAL,
+        "fixture_mode": bool(fixture_mode),
+        "adapter_is_real": not fixture_mode,
+        "source_contacted": False,
+        "real_source_connected": False,
+        "note": ("the worker failed to produce a well-formed answer, so this run proves "
+                 "nothing about Mail and claims nothing from it. This is a defect in the "
+                 "worker, not a state of the source."),
+        "next_action": ("re-run the same command with --fixture-mode to see whether the "
+                        "defect is host-independent, and record it with this command "
+                        "line; do not build on this run"),
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="switchboard-mini",
@@ -46,8 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
                              "contacting Mail. Every document is labelled FIXTURE:")
     parser.add_argument("--fixture-scenario",
                         default="granted",
-                        choices=["granted", "permission_denied", "offline",
-                                 "partial_history"],
+                        choices=list(FIXTURE_SCENARIOS),
                         help="which recorded result to answer from in --fixture-mode")
     parser.add_argument("--max-scan", type=int, default=2000,
                         help="bounded id-scan window per mailbox (default 2000)")
@@ -100,6 +170,7 @@ def build_parser() -> argparse.ArgumentParser:
     manifest = sub.add_parser("manifest", help="capability manifest (unprobed by default)")
     manifest.add_argument("--probe-result", default=None,
                           help="JSONL file of probe rows to fold into the manifest")
+    _add_global_flags_to_subparsers(sub)
     return parser
 
 
@@ -132,6 +203,7 @@ def cmd_probe(args) -> int:
         _line(row)
     if args.summary_to_stderr:
         sys.stderr.write(O.emit({"event": "probe_summary", "origin": adapter.origin,
+                                 "adapter_is_real": bool(adapter.adapter_is_real),
                                  "fixture_mode": bool(args.fixture_mode),
                                  "label": getattr(adapter, "_label", lambda: None)(),
                                  **run.summary()}) + "\n")
@@ -210,8 +282,7 @@ def main(argv: Optional[list] = None) -> int:
                 "capabilities": list(CAPABILITY_NAMES),
                 "python": sys.version.split()[0],
                 "standard_library_only": True,
-                "fixture_scenarios": ["granted", "permission_denied", "offline",
-                                      "partial_history"]}, args.pretty)
+                "fixture_scenarios": list(FIXTURE_SCENARIOS)}, args.pretty)
         return EXIT_OK
     handlers = {"probe": cmd_probe, "run": cmd_run, "health": cmd_health,
                 "accounts": cmd_accounts, "mailboxes": cmd_mailboxes, "list": cmd_list,
@@ -220,6 +291,36 @@ def main(argv: Optional[list] = None) -> int:
         return handlers[args.command](args)
     except KeyboardInterrupt:
         return EXIT_OK
+    except Exception as exc:
+        # The worker answers with typed states, so an unexpected exception is reported as
+        # one: exit 3 (harness failure), a well-formed JSON document on stdout naming the
+        # defect, and never a traceback. Nothing here claims a source value.
+        return _report_harness_failure(args, exc)
 
 
-__all__ = ["main", "build_parser", "CAPABILITY_NAMES", "WORKER_VERSION"]
+def _report_harness_failure(args, exc: BaseException) -> int:
+    document = harness_failure_document(args.command, exc,
+                                       fixture_mode=bool(getattr(args, "fixture_mode",
+                                                                 False)))
+    try:
+        _print(document, bool(getattr(args, "pretty", False)))
+    except Exception:                 # the guard must not fail in its own right
+        sys.stdout.write(json.dumps({
+            "event": "harness_failure",
+            "command": str(getattr(args, "command", "")),
+            "state": "harness_error",
+            "reason": "harness_failure_document_not_serialisable",
+            "failure_type": type(exc).__name__,
+            "detail": "the worker could not describe its own failure; see stderr",
+            "real_source_connected": False,
+        }, sort_keys=True) + "\n")
+    sys.stderr.write(
+        f"switchboard-mini {getattr(args, 'command', '')}: harness failure "
+        f"({type(exc).__name__}): {exc}\n"
+        "This is a defect in the worker, not a state of Mail. The JSON document above "
+        "records it; no source value was read.\n")
+    return EXIT_HARNESS_FAILURE
+
+
+__all__ = ["main", "build_parser", "CAPABILITY_NAMES", "WORKER_VERSION",
+           "harness_failure_document", "FIXTURE_SCENARIOS"]

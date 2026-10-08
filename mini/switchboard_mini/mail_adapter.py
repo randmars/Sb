@@ -94,17 +94,37 @@ class MailReadOnlyAdapter:
     def origin(self) -> str:
         return self.transport.origin
 
+    @property
+    def adapter_is_real(self) -> bool:
+        """The real adapter answered, not a fixture twin. Not a contact claim."""
+        return bool(getattr(self.transport, "adapter_is_real", False))
+
     def _label(self) -> Optional[str]:
         return getattr(self.transport, "label", None)
 
-    def _stamp(self, outcome: O.Outcome, *, account: Optional[str] = None) -> O.Outcome:
+    def _stamp(self, outcome: O.Outcome, *, account: Optional[str] = None,
+               from_read: Optional[O.Outcome] = None) -> O.Outcome:
+        """Stamp adapter identity, and the provenance of the read this outcome came from.
+
+        ``from_read`` is the transport outcome the adapter derived this document from, so
+        the derived document keeps the fact that Mail was really reached (and keeps it
+        absent when it was not). An outcome the adapter builds on its own -- a local
+        rejection, an unsupported capability, a command that contacts nothing -- passes
+        nothing and stays uncontacted.
+        """
         outcome.adapter = self.name
         outcome.origin = self.origin
+        outcome.adapter_is_real = self.adapter_is_real
+        if from_read is not None:
+            outcome.adapter_is_real = bool(from_read.adapter_is_real
+                                           or self.adapter_is_real)
+            outcome.source_contacted = bool(from_read.source_contacted)
         if account:
             outcome.account_id = account_key(account)
         if not outcome.is_real:
             outcome.label = self._label() or O.fixture_label(self.name)
         return outcome
+
 
     # -- discovery ---------------------------------------------------------
     def identity(self) -> O.Outcome:
@@ -129,7 +149,8 @@ class MailReadOnlyAdapter:
             "permission_state": O.PERMISSION_GRANTED,
             "note": ("connected is not completeness and not send capability: this worker "
                      "holds no send path at all"),
-        }, account_id=account_key(account) if account else None), account=account)
+        }, account_id=account_key(account) if account else None), account=account,
+                           from_read=ident)
 
     def accounts(self) -> O.Outcome:
         return self._stamp(self.transport.accounts())
@@ -178,8 +199,22 @@ class MailReadOnlyAdapter:
             "manifest_version": MANIFEST_VERSION,
             "host_role": self.host_role,
             "origin": self.origin,
-            "real_source_connected": self.origin == O.REAL,
+            "adapter_is_real": self.adapter_is_real,
+            # The manifest command contacts nothing at all: it is the worker's own
+            # declaration plus any probe rows folded in. `real_source_connected` therefore
+            # stays false here even with the real adapter selected -- what Mail could do
+            # is what the *rows* say, not what this document can claim.
+            "real_source_connected": False,
+            "source_contacted": False,
             "probed": bool(measured),
+            "folded_probe_rows": {
+                "count": len(measured),
+                "any_from_real_source": bool(any(
+                    row.get("real_source_connected") for row in (probe_rows or []))),
+                "note": ("a folded row carries its own origin, label and "
+                         "real_source_connected value; folding it in does not make this "
+                         "document a measurement"),
+            },
             "capabilities": capabilities,
         }
         if self.origin != O.REAL:
@@ -318,14 +353,14 @@ class MailReadOnlyAdapter:
             return self._stamp(O.Outcome.partial(data, reset_reason,
                                                  reason="cursor_reset",
                                                  account_id=account_key(account)),
-                               account=account)
+                               account=account, from_read=scan)
         if capped or next_cursor:
             return self._stamp(O.Outcome.partial(data, gap_reason or "partial page",
                                                  reason="partial_history",
                                                  account_id=account_key(account)),
-                               account=account)
+                               account=account, from_read=scan)
         return self._stamp(O.Outcome.ok(data, account_id=account_key(account)),
-                           account=account)
+                           account=account, from_read=scan)
 
     def retrieve(self, account: str, namespaced_id: str) -> O.Outcome:
         try:
@@ -357,13 +392,13 @@ class MailReadOnlyAdapter:
                     f"messages of {mailbox}; the scan was capped, so this run proves only "
                     f"that the message is not in the scanned window",
                     reason="not_in_scanned_window", account_id=account_key(account)),
-                    account=account)
+                    account=account, from_read=scan)
             return self._stamp(O.Outcome.permanent(
                 f"unknown message reference {namespaced_id}: not present in {mailbox}",
                 reason="unknown_message_reference",
                 data={"mailbox_total_count": scan.data.get("total_count"),
                       "scanned_all": True},
-                account_id=account_key(account)), account=account)
+                account_id=account_key(account)), account=account, from_read=scan)
 
         got = self._window(account, mailbox, index, index)
         if not got.usable:
@@ -373,7 +408,7 @@ class MailReadOnlyAdapter:
             return self._stamp(O.Outcome.permanent(
                 f"message {internal_id} disappeared between the id scan and the read",
                 reason="message_vanished", account_id=account_key(account)),
-                account=account)
+                account=account, from_read=got)
         message = dict(items[0])
         message["namespaced_id"] = namespaced_id
         message["retrieval_pointer"] = "mail:" + "/".join(
@@ -404,16 +439,16 @@ class MailReadOnlyAdapter:
                 f"headers retrieved but message content is unavailable "
                 f"({body.code}: {body.detail}); this is not an empty message",
                 reason="content_unavailable", account_id=account_key(account)),
-                account=account)
+                account=account, from_read=got)
         if not attachments.usable:
             return self._stamp(O.Outcome.partial(
                 data,
                 f"headers and body retrieved; attachment metadata is unavailable "
                 f"({attachments.code}: {attachments.detail})",
                 reason="attachment_metadata_unavailable",
-                account_id=account_key(account)), account=account)
+                account_id=account_key(account)), account=account, from_read=got)
         return self._stamp(O.Outcome.ok(data, account_id=account_key(account)),
-                           account=account)
+                           account=account, from_read=got)
 
     def history_poll(self, account: str, scope: str, *, cursor: Optional[str] = None,
                      limit: int = 50) -> O.Outcome:
@@ -454,7 +489,7 @@ class MailReadOnlyAdapter:
             "mailbox_total_count": scan.data.get("total_count"),
             "note": ("a declaration about one query against one mailbox, not a statement "
                      "about the account's history"),
-        }, account_id=account_key(account)), account=account)
+        }, account_id=account_key(account)), account=account, from_read=scan)
 
     def materialize_attachment(self, account: str, namespaced_id: str, *,
                                max_bytes: int = 10_000_000) -> O.Outcome:
