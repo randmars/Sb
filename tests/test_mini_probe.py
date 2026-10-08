@@ -14,7 +14,8 @@ import unittest
 
 from switchboard_mini import outcomes as O
 from switchboard_mini.mail_adapter import build_adapter
-from switchboard_mini.probe import DOCUMENTED_CAPABILITY_NAMES, (CAPABILITY_NAMES, CAPABILITIES, ROW_FIELDS,
+from switchboard_mini.probe import (CAPABILITY_NAMES, CAPABILITIES,
+                                    DOCUMENTED_CAPABILITY_NAMES,
                                     ROW_LABELLING_FIELDS, run_probe)
 
 PERMISSION_STATES = set(O.PERMISSION_STATES)
