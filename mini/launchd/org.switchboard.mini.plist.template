@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  UNVERIFIED TEMPLATE — this plist has NOT been loaded, bootstrapped or tested anywhere.
+  It is a starting point for the Gate 2 sitting on Randy's Mac, not a tested artifact.
+
+  Before it will work, on the Mac:
+    * replace REPO_PATH with the absolute path of this repository checkout;
+    * replace HOME_PATH with Randy's home directory (or drop the --state flag and let the
+      worker default to ~/.switchboard-mini/state.json);
+    * set the account and mailbox to poll;
+    * confirm the grant: the process launchd starts is the one that needs Automation access
+      to Mail, so the Terminal/launchd entry must be approved in System Settings.
+
+  Then: cp this file to ~/Library/LaunchAgents/org.switchboard.mini.plist
+        launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.switchboard.mini.plist
+        launchctl print gui/$(id -u)/org.switchboard.mini
+  and read the log at HOME_PATH/Library/Logs/switchboard-mini.log.
+
+  `switchboard-mini run` is written for launchd: it stays in the foreground, never forks,
+  and writes one JSON document per line to stdout. Stop it with:
+        launchctl bootout gui/$(id -u)/org.switchboard.mini
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>org.switchboard.mini</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>REPO_PATH/mini/bin/switchboard-mini</string>
+    <string>run</string>
+    <string>--interval</string>
+    <string>60</string>
+    <string>--state</string>
+    <string>HOME_PATH/.switchboard-mini/state.json</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>HOME_PATH/Library/Logs/switchboard-mini.log</string>
+  <key>StandardErrorPath</key>
+  <string>HOME_PATH/Library/Logs/switchboard-mini.log</string>
+</dict>
+</plist>

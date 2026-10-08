@@ -1,0 +1,28 @@
+{
+  "fixture_set": "mini-mail-fixtures-1.0",
+  "scenario": "offline",
+  "origin": "fixture",
+  "label": "FIXTURE:mail(recorded mailbox fixture 'offline')",
+  "note": "Synthetic recorded result: Mail.app is not running, so the Apple event connection fails for reads. Reproduces the shape of osascript's real message for error -600. The running-check itself is not faulted, because asking whether an application is running does not require it to be running. Not a recording of Randy's machine.",
+  "platform": "fixture-macos",
+  "mail_bundle": {
+    "path": "/System/Applications/Mail.app",
+    "short_version": "FIXTURE-16.0",
+    "build": "FIXTURE-3820.1"
+  },
+  "mail_running": false,
+  "permission": "granted",
+  "scan_cap": 50,
+  "total_count": 0,
+  "accounts": [],
+  "mailboxes": {},
+  "messages": {},
+  "fault": {
+    "applies_to": ["accounts", "mailboxes", "message_ids", "message_window",
+                   "message_body", "message_source", "attachments"],
+    "ae_code": -600,
+    "message": "Mail got an error: Application isn't running.",
+    "reason": "mail_not_running",
+    "detail": "FIXTURE: recorded Mail automation error -600 (mail_not_running): Mail got an error: Application isn't running."
+  }
+}
