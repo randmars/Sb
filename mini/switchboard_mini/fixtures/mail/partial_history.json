@@ -1,0 +1,107 @@
+{
+  "fixture_set": "mini-mail-fixtures-1.0",
+  "scenario": "partial_history",
+  "origin": "fixture",
+  "label": "FIXTURE:mail(recorded mailbox fixture 'partial_history')",
+  "note": "Synthetic recorded result: the mailbox holds more messages than the bounded scan window, so the run proves only that it reached the end of the scanned window. Not a recording of Randy's mailbox.",
+  "platform": "fixture-macos",
+  "mail_bundle": {
+    "path": "/System/Applications/Mail.app",
+    "short_version": "FIXTURE-16.0",
+    "build": "FIXTURE-3820.1"
+  },
+  "mail_running": true,
+  "permission": "granted",
+  "scan_cap": 4,
+  "total_count": 9,
+  "ordering_sample": {
+    "first_index_date_text": "Monday 29 September 2026 at 08:12:00",
+    "last_index_date_text": "Thursday 1 October 2026 at 16:20:00"
+  },
+  "accounts": [
+    {
+      "name": "FIXTURE Account A",
+      "account_type": "imap",
+      "enabled": true,
+      "address_count": 2
+    }
+  ],
+  "mailboxes": {
+    "FIXTURE Account A": [
+      {"name": "INBOX", "unread_count": 3, "provider_mailbox_id_fingerprint": "sha256:fixture-inbox"}
+    ]
+  },
+  "messages": {
+    "FIXTURE Account A|INBOX": [
+      {
+        "index": 1,
+        "internal_id": 101,
+        "subject": "FIXTURE oldest message in the scanned window",
+        "sender": "Alex Rivera <alex.rivera@example-mail.test>",
+        "read": true,
+        "rfc_message_id": "<fixture-101@example-mail.test>",
+        "date_text": "Monday 29 September 2026 at 08:12:00",
+        "date_parts": [2026, 9, 29, 8, 12, 0],
+        "recipient_counts": {"to": 1, "cc": 0, "bcc": 0},
+        "body": "FIXTURE body text for message 101.",
+        "body_available": true,
+        "source": "FIXTURE raw source for message 101",
+        "source_available": true,
+        "attachments_available": true,
+        "attachments": []
+      },
+      {
+        "index": 2,
+        "internal_id": 102,
+        "subject": "FIXTURE second",
+        "sender": "Randy <randy@example-mail.test>",
+        "read": true,
+        "rfc_message_id": "<fixture-102@example-mail.test>",
+        "date_text": "Monday 29 September 2026 at 09:30:00",
+        "date_parts": [2026, 9, 29, 9, 30, 0],
+        "recipient_counts": {"to": 1, "cc": 0, "bcc": 0},
+        "body": "FIXTURE body text for message 102.",
+        "body_available": true,
+        "source": "FIXTURE raw source for message 102",
+        "source_available": true,
+        "attachments_available": true,
+        "attachments": []
+      },
+      {
+        "index": 3,
+        "internal_id": 103,
+        "subject": "FIXTURE third",
+        "sender": "Vendor Accounts <supplier@example-vendor.test>",
+        "read": false,
+        "rfc_message_id": "<fixture-103@example-vendor.test>",
+        "date_text": "Thursday 1 October 2026 at 13:00:00",
+        "date_parts": [2026, 10, 1, 13, 0, 0],
+        "recipient_counts": {"to": 1, "cc": 0, "bcc": 0},
+        "body": "FIXTURE body text for message 103.",
+        "body_available": true,
+        "source": "FIXTURE raw source for message 103",
+        "source_available": true,
+        "attachments_available": true,
+        "attachments": []
+      },
+      {
+        "index": 4,
+        "internal_id": 104,
+        "subject": "FIXTURE last message in the scanned window",
+        "sender": "Vendor Accounts <supplier@example-vendor.test>",
+        "read": false,
+        "rfc_message_id": "<fixture-104@example-vendor.test>",
+        "date_text": "Thursday 1 October 2026 at 16:20:00",
+        "date_parts": [2026, 10, 1, 16, 20, 0],
+        "recipient_counts": {"to": 1, "cc": 0, "bcc": 0},
+        "body": "FIXTURE body text for message 104.",
+        "body_available": true,
+        "source": "FIXTURE raw source for message 104",
+        "source_available": true,
+        "attachments_available": true,
+        "attachments": []
+      }
+    ]
+  },
+  "fault": null
+}

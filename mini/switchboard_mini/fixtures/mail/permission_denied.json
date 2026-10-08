@@ -1,0 +1,27 @@
+{
+  "fixture_set": "mini-mail-fixtures-1.0",
+  "scenario": "permission_denied",
+  "origin": "fixture",
+  "label": "FIXTURE:mail(recorded mailbox fixture 'permission_denied')",
+  "note": "Synthetic recorded result: the macOS Automation permission for this worker was refused. It reproduces the shape of osascript's real failure message for error -1743 so the same classification code is exercised here as on the Mac. It is not a recording of Randy's machine.",
+  "platform": "fixture-macos",
+  "mail_bundle": {
+    "path": "/System/Applications/Mail.app",
+    "short_version": "FIXTURE-16.0",
+    "build": "FIXTURE-3820.1"
+  },
+  "mail_running": true,
+  "permission": "denied",
+  "scan_cap": 50,
+  "total_count": 0,
+  "accounts": [],
+  "mailboxes": {},
+  "messages": {},
+  "fault": {
+    "applies_to": "*",
+    "ae_code": -1743,
+    "message": "Not authorized to send Apple events to Mail.",
+    "reason": "not_authorized_to_send_apple_events",
+    "detail": "FIXTURE: recorded Mail automation error -1743 (not_authorized_to_send_apple_events): Not authorized to send Apple events to Mail."
+  }
+}

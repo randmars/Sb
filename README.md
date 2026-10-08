@@ -59,11 +59,12 @@ source; where it has not, the product shows an explicit typed state.*
 |---|---|---|
 | Grace service, ledger, approvals, effects, rules, ingest | **Executed for real here** — real SQLite, real transactions, real process restarts | — |
 | CLI and its JSON output | **Executed for real here** | — |
-| Test suite (`tests/`, 31 tests) | **Executed for real here** (all pass) | — |
+| Test suite (`tests/`, 142 tests) | **Executed for real here** (all pass) | — |
 | Mail / Beeper / Contacts / Hermes adapters | **Mock only** (`MockMailAdapter`, `MockBeeperAdapter`, `MockContactsAdapter`, `MockHermesAdapter`), labelled `MOCK:` | The real adapters, the capability manifests they return, permissions, versions, latency (PRD §11, §14 Gate 2) |
 | Agent runs (the "MOCK worker pass") | **Simulated**; produces a labelled draft, never an external message | Real Hermes sessions/runs/progress/stop (Gate 3) |
 | Sends, dispatch results, receipts | **Simulated end to end.** `verified_against_real_source = 0` on every receipt | Real outbound operation and reconciled receipt (Gate 3) |
-| Review web client, phone surface | **Out of scope for this task** — not built here | Gate 3/4 with Randy's phone |
+| Review web client, phone surface | **Built and exercised for real here** — `grace serve` over HTTP on this computer, driven in a real browser at iPhone viewport (Needs me → assign → mock worker run → review → approve-and-bind → dispatch → receipt). Served content is labelled mock (`MOCK:`, `mocked: true`) | Randy validating triage and approval on his own phone, and how his phone reaches the client (Gate 3/4) |
+| Mini worker (`mini/`, `switchboard-mini`) | **Executed for real here** against recorded fixtures only; the four `--fixture-mode` probe scenarios and the cursor/retrieval behaviour are tested. Every row says `origin: fixture` | The real Mail.app probe rows, the Automation permission, the installed build's version and its actual AppleScript behaviour (Gate 2). See `mini/README.md` |
 
 Consequences you can see in the data: every receipt records
 `verified_against_real_source = 0`; every adapter's `describe()` returns
@@ -269,16 +270,32 @@ identifiers seen.
 | `rule-save`, `rule-preview`, `rule-apply`, `rule-cancel`, `rule-disable` | versioned rules with frozen preview and repeat-safe apply |
 | `reap`, `outbox`, `audit` | lease reaping, publication recovery, audit trail |
 | `scenarios`, `export-fixtures`, `demo` | mock scenario list, fixture export, full labelled walk |
+| `serve [--host H] [--port P] [--token T] [--print-url]` | the authenticated Gate 1 review client over HTTP (see below) |
 
 All commands accept `--db <path>` (default `.grace/grace.sqlite3`), `--scenario <name>` and
 `--fault <fault>` (repeatable), so any scenario can be reproduced from the command line.
+
+### Review client (`grace serve`)
+
+```bash
+python3 -m grace serve --port 3000 --print-url     # prints the URL to open
+```
+
+`serve` runs the Gate 1 review client — the four surfaces (Needs me, Working, All
+conversations, Rules and source health) — over HTTP from the same process, against the same
+SQLite database `.grace/grace.sqlite3` the CLI writes, so a decision made in the browser and
+one made on the command line land in the same ledger. It is authenticated: the client needs
+the bearer token the server prints/accepts, and it refuses to serve without one, because it
+is a phone surface and never a public page. Drive it at a phone viewport; every document it
+renders carries the mock labels (`MOCK:`, `mocked: true`) while the adapters behind it are
+mock adapters.
 
 ---
 
 ## Tests
 
 ```bash
-python3 -m unittest discover -s tests -t .           # 31 tests, no third-party dependency
+python3 -m unittest discover -s tests -t .           # 142 tests, no third-party dependency
 ```
 
 The five required scenarios:
@@ -330,3 +347,28 @@ change-history tokens and the reset behaviour. Hermes: the installed build's API
 sessions, runs, progress and stop. Each of those must be observed on Randy's machine and
 recorded against the matching capability manifest entry before the corresponding claim moves
 from `mock` to `real`.
+
+## Provenance vocabulary (correction, 2026-10-08)
+
+Two different claims, two different fields -- do not conflate them:
+
+* `adapter_is_real` -- *which adapter answered*: the real one (`true`) or its recorded
+  fixture twin (`false`). On this Linux computer the real adapter is selected and can
+  read nothing, so real-mode documents legitimately carry `adapter_is_real: true`.
+* `real_source_connected` -- *whether a real source was contacted and the reported value
+  came from it*. Same meaning as everywhere else in the product (Grace's health output,
+  receipts, the mock-labelling rules). It is `false` on every command, in both modes,
+  whenever no source was actually read -- which is always, on this computer.
+
+Before this correction the manifest overloaded `real_source_connected` to mean "this is
+the real adapter", so `manifest` in real mode claimed `real_source_connected: true` on a
+host where Mail was never contacted. That claim is withdrawn. The probe rows and the
+manifest now carry both fields with the meanings above.
+
+Also: the global flags (`--fixture-mode`, `--fixture-scenario`, `--pretty`,
+`--summary-to-stderr`) may be given **before or after** the subcommand -- `probe
+--fixture-mode` and `--fixture-mode probe` mean the same thing. A flag given before the
+subcommand is never reset by the subcommand parser, and a test covers both positions.
+
+If any command cannot describe itself, it prints a typed `harness_failure` document on
+stdout with exit 3 -- never a stack trace.

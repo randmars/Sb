@@ -1,0 +1,37 @@
+#!/bin/sh
+# switchboard-mini launcher.
+#
+# Resolves its own location through any symlink, puts the package directory on
+# PYTHONPATH and execs the system Python. No virtualenv and no third-party import:
+# macOS ships a Python 3 without pip guarantees, so the worker depends on the standard
+# library only. `mini/install.sh` links this file into a bin directory.
+set -eu
+
+SELF=$0
+while [ -h "$SELF" ]; do
+  LINK_DIR=$(cd -P "$(dirname "$SELF")" && pwd)
+  SELF=$(readlink "$SELF")
+  case $SELF in
+    /*) ;;
+    *) SELF="$LINK_DIR/$SELF" ;;
+  esac
+done
+HERE=$(cd -P "$(dirname "$SELF")" && pwd)
+PKG_DIR=$(cd -P "$HERE/.." && pwd)
+
+PY=${SWITCHBOARD_PYTHON:-}
+if [ -z "$PY" ]; then
+  PY=$(command -v python3 2>/dev/null || true)
+fi
+if [ -z "$PY" ] && [ -x /usr/bin/python3 ]; then
+  PY=/usr/bin/python3
+fi
+if [ -z "$PY" ]; then
+  echo "switchboard-mini: no python3 found. Install the macOS Command Line Tools" >&2
+  echo "(\`xcode-select --install\`) or set SWITCHBOARD_PYTHON to a Python 3.9+ binary." >&2
+  exit 2
+fi
+
+PYTHONPATH="$PKG_DIR${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH
+exec "$PY" -m switchboard_mini "$@"
