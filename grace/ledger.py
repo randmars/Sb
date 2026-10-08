@@ -510,7 +510,12 @@ class Ledger:
             "SELECT c.conv_id, c.namespaced_id, c.availability, c.availability_reason, "
             "c.source_time_last, c.audience_kind, c.origin, c.mock_label, l.relevance "
             "FROM workspace_source_link l JOIN source_conversation c ON c.conv_id = l.conv_id "
-            "WHERE l.ws_conv_id = ? ORDER BY c.source_time_last DESC", (ws["ws_conv_id"],))
+            "WHERE l.ws_conv_id = ? "
+            # The order of a conversation's sources is part of the contract the client
+            # relies on: most recent source activity first, with the provider's namespaced
+            # id as a stable tiebreak so two threads with the same timestamp never swap
+            # places between reads.
+            "ORDER BY c.source_time_last DESC, c.namespaced_id ASC", (ws["ws_conv_id"],))
         latest = self.store.one(
             "SELECT msg_ref_id, source_time, ingested_at, read_state, hidden_state, availability, "
             "body_state, sender_json, minimal_metadata, origin, mock_label "

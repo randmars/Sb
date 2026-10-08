@@ -38,10 +38,33 @@ FIXTURE_MARKERS = ("Alex", "Kestrel", "acct_", "MOCK:", "needs_me", "mock_label"
                    "researcher", "ws_", "conv_", "unread")
 
 
+class ResponseHeaders(dict):
+    """The headers the server actually sent, keyed case-insensitively.
+
+    HTTP header names are case-insensitive, so every lookup lower-cases its argument
+    while the payload is kept exactly as it came off the wire. ``raw`` keeps the
+    original (name, value) pairs in order, including any repeats, so a test can prove
+    what was on the wire rather than what a dict happened to keep.
+    """
+
+    def __init__(self, pairs) -> None:
+        self.raw = [(str(name), str(value)) for name, value in pairs]
+        super().__init__((name.lower(), value) for name, value in self.raw)
+
+    def __contains__(self, key) -> bool:          # type: ignore[override]
+        return dict.__contains__(self, str(key).lower())
+
+    def __getitem__(self, key):                   # type: ignore[override]
+        return dict.__getitem__(self, str(key).lower())
+
+    def get(self, key, default=None):             # type: ignore[override]
+        return dict.get(self, str(key).lower(), default)
+
+
 class Response:
-    def __init__(self, status: int, headers: dict, body: bytes):
+    def __init__(self, status: int, headers, body: bytes):
         self.status = status
-        self.headers = {k.lower(): v for k, v in headers}
+        self.headers = ResponseHeaders(headers)
         self.body = body
 
     @property
@@ -101,7 +124,9 @@ class WebCase(unittest.TestCase):
                          headers=headers)
             raw = conn.getresponse()
             payload = raw.read()
-            return Response(raw.status, dict(raw.getheaders()), payload)
+            # raw.getheaders() is the ordered list of (name, value) pairs the server
+            # sent; hand it over untouched so Response can prove what was on the wire.
+            return Response(raw.status, raw.getheaders(), payload)
         finally:
             conn.close()
 
@@ -290,7 +315,18 @@ class TestFourSurfaces(WebCase):
         self.assertEqual(job["job_state"], "queued")
         self.assertTrue(job["progress"])
         self.assertTrue(job["age"])
-        self.assertEqual(item["source_accounts"][0]["adapter"], "mock_mail")
+        # A conversation's sources are ordered by their own latest activity, newest first,
+        # with the namespaced id as a stable tiebreak (ledger._ws_brief). That order is part
+        # of the contract: the client renders source_accounts[0] as the primary source. This
+        # workspace's most recent thread is Alex's Beeper DM, so mock_beeper leads; the mail
+        # threads follow. Asserting the whole order proves it is defined, not incidental.
+        self.assertEqual([link["adapter"] for link in item["source_links"]],
+                         ["mock_beeper", "mock_beeper", "mock_mail", "mock_mail"])
+        times = [link["source_time_last"] for link in item["source_links"]]
+        self.assertEqual(times, sorted(times, reverse=True))
+        self.assertEqual([account["adapter"] for account in item["source_accounts"]],
+                         [link["adapter"] for link in item["source_links"]])
+        self.assertEqual(item["source_accounts"][0]["adapter"], "mock_beeper")
 
     def test_counts_stay_independent_when_an_item_is_assigned(self) -> None:
         before = self.data(self.get("/api/overview"))["counts"]
@@ -456,7 +492,16 @@ class TestReviewApprovalLoop(WebCase):
         self.assertFalse(refused["ok"])
 
         # --- approve v2, then dispatch ------------------------------------
-        second = self.post(f"/api/drafts/{draft_id}/approve",
+        # The approval resource is one *version*, so the owner approves the version the
+        # review screen now shows (v2). Re-approving the superseded v1 must still fail: an
+        # approval never attaches itself to content the owner has not bound (PRD §10).
+        self.assertEqual(new_draft["version"], draft["version"] + 1)
+        self.assertNotEqual(new_draft["draft_id"], draft["draft_id"])
+        stale = self.post(f"/api/drafts/{draft_id}/approve",
+                          {"operation_id": "op-ui-stale"}).json
+        self.assertFalse(stale["ok"], stale)
+        self.assertEqual(stale["code"], "invalid")
+        second = self.post(f"/api/drafts/{new_draft['draft_id']}/approve",
                            {"operation_id": "op-ui-2"}).json
         self.assertTrue(second["ok"], second)
         approval_id = second["result"]["data"]["approval"]["approval_id"]

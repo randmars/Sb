@@ -440,8 +440,79 @@ class Ingest:
         merged["revision"] = event.get("revision", message.get("revision", "1"))
         return merged
 
+    # ---------------------------------------------------------- observations ---
+    #: A source counts as healthy only when its own adapter says so in these terms. Any
+    #: other typed outcome (offline, permission_denied, unsupported, ...) is a condition
+    #: the owner must be able to see.
+    HEALTHY_OBSERVED_STATES = ("success", "ok", "current", "connected", "syncing")
+
+    #: Coverage states that mean "this ledger view is as complete as the source allowed".
+    COMPLETE_COVERAGE_STATES = ("current", "fixture", "fixture_scan", "verified_scan")
+
+    def observe_sources(self) -> dict[str, dict]:
+        """Ask every account's adapter what its state is *now*, keyed by account id.
+
+        The stored ``source_account`` row records what was last written (a fixture load or
+        an earlier probe); it cannot know that a source has since gone offline, that the
+        Mini app closed or that a permission was revoked. Health presentation is therefore
+        built from the adapter's own typed outcome, so a source that cannot answer is shown
+        as that failure with its reason instead of staying green (PRD §6 "Health
+        presentation"; §13 "a source that has stopped syncing should not remain green
+        indefinitely"; R09, R15; T10, T20).
+
+        This is a health probe only: nothing is read, no cursor moves and no stored row is
+        written. A probe that raises is reported as ``unknown`` rather than breaking a read
+        surface — an unobserved source is not a healthy one.
+        """
+        observed: dict[str, dict] = {}
+        rows = self.store.all("SELECT account_id, adapter FROM source_account "
+                              "ORDER BY adapter, account_id")
+        for row in rows:
+            base = {"account_id": row["account_id"], "adapter": row["adapter"],
+                    "observed_at": C.now()}
+            adapter = self.adapters.get(row["adapter"])
+            if adapter is None or not hasattr(adapter, "health"):
+                observed[row["account_id"]] = {
+                    **base, "code": "unknown", "data": None, "mocked": True,
+                    "label": C.mock_label(row["adapter"]),
+                    "detail": (f"adapter {row['adapter']!r} declares no health operation, so this "
+                               "account's state could not be observed")}
+                continue
+            try:
+                outcome = adapter.health(row["account_id"])
+                payload = outcome.to_dict()
+                observed[row["account_id"]] = {
+                    **base, "code": outcome.code, "detail": outcome.detail or "",
+                    "mocked": bool(outcome.mocked), "label": payload.get("mock_label"),
+                    "data": outcome.data if outcome.usable else None}
+            except Exception as exc:  # noqa: BLE001 - a probe must never break a surface
+                observed[row["account_id"]] = {
+                    **base, "code": "unknown", "data": None, "mocked": True,
+                    "label": C.mock_label(row["adapter"]),
+                    "detail": (f"health probe failed: {exc.__class__.__name__}: {exc}")}
+        return observed
+
+    def _coverage_declaration(self, account: dict) -> dict:
+        """The adapter's own statement about coverage for one account (may be empty).
+
+        Optional by design: an adapter that has nothing to say about coverage answers
+        ``unsupported``, and one that does not implement the operation leaves the recorded
+        checkpoints to speak for themselves.
+        """
+        adapter = self.adapters.get(account["adapter"])
+        if adapter is None or not hasattr(adapter, "coverage_declaration"):
+            return {}
+        try:
+            outcome = adapter.coverage_declaration(account["account_id"])
+        except Exception:  # noqa: BLE001 - a declaration must never break a read surface
+            return {}
+        if not outcome.usable or not outcome.data:
+            return {}
+        return dict(outcome.data)
+
     # -------------------------------------------------------------- coverage ---
     def coverage(self, account_id: str | None = None) -> list[dict]:
+        observed = self.observe_sources()
         sql = ("SELECT c.*, a.display_name, a.adapter, a.health_state, a.permission_state, "
                "a.last_success_at AS account_last_success FROM sync_checkpoint c "
                "JOIN source_account a ON a.account_id = c.account_id")
@@ -452,14 +523,60 @@ class Ingest:
         rows = self.store.all(sql + " ORDER BY c.account_id, c.scope_ref", args)
         for row in rows:
             row["coverage"] = json.loads(row["coverage_json"])
+            row["note"] = (row["coverage"] or {}).get("note")
             row["mock"] = row["origin"] == C.MOCK
             row["coverage_disclosure"] = (
                 "MOCK: coverage describes fixture data only. A completed pagination run proves "
                 "only that the adapter reached the end of that query's accessible result set.")
+        # A checkpoint only tells the reader where the last successful scan stopped. The
+        # adapter can additionally declare that its coverage is partial (an injected
+        # partial-history fault here; on a real source, a bounded query or a reset change
+        # token). That statement must not be lost, or a partial view would read as a
+        # complete one (PRD §6, T09/T20).
+        for account in self.store.all(
+                "SELECT account_id, adapter, display_name, health_state, permission_state, "
+                "last_success_at FROM source_account ORDER BY adapter, account_id"):
+            if account_id and account["account_id"] != account_id:
+                continue
+            sample = observed.get(account["account_id"]) or {}
+            declared = self._coverage_declaration(account)
+            state = declared.get("coverage_state") \
+                or (sample.get("data") or {}).get("coverage_state")
+            if not state or state in self.COMPLETE_COVERAGE_STATES:
+                continue
+            mocked = bool(sample.get("mocked"))
+            gap = declared.get("gap_reason") or sample.get("detail") or (
+                f"the adapter reports coverage_state={state} for this account: the "
+                "checkpoints below are not a complete history")
+            rows.append({
+                "checkpoint_id": C.stable_id("obs-ckpt", account["account_id"], state),
+                "account_id": account["account_id"], "scope": "health",
+                "scope_ref": "(account observation)",
+                "display_name": account["display_name"], "adapter": account["adapter"],
+                "health_state": account["health_state"],
+                "permission_state": account["permission_state"],
+                "cursor_value": None, "coverage_state": state, "gap_reason": gap,
+                "note": declared.get("note") or (
+                    "Observed coverage, not a stored checkpoint: the adapter declares this "
+                    "account's coverage partial for this run."),
+                "coverage": sample.get("data"), "observed": True,
+                "observed_at": sample.get("observed_at"),
+                "last_success_at": account["last_success_at"],
+                "account_last_success": account["last_success_at"],
+                "mock": mocked, "origin": C.MOCK if mocked else C.REAL,
+                "mock_label": sample.get("label") if mocked else None,
+                "coverage_disclosure": (
+                    "MOCK: coverage describes fixture data only. A completed pagination run "
+                    "proves only that the adapter reached the end of that query's accessible "
+                    "result set.") if mocked else (
+                    "Observed coverage: the adapter reached the end of one query's accessible "
+                    "result set, which is not the end of history."),
+            })
         return rows
 
     def source_health(self) -> list[dict]:
         rows = self.store.all("SELECT * FROM source_account ORDER BY adapter, account_id")
+        observed = self.observe_sources()
         for row in rows:
             row["capabilities"] = self.store.all(
                 "SELECT name, supported, state, limitation, probe_method FROM capability "
@@ -468,4 +585,20 @@ class Ingest:
             row["mock"] = row["origin"] == C.MOCK
             row["disclosure"] = ("MOCK: this is a labelled mock account. It proves nothing about "
                                  "the installed Mail, Beeper, Contacts or Hermes on Randy's Mac.")
+            sample = observed.get(row["account_id"]) or {}
+            row["stored_health_state"] = row["health_state"]
+            row["stored_health_detail"] = row["health_detail"]
+            row["observed_health_state"] = sample.get("code")
+            row["observed_at"] = sample.get("observed_at")
+            row["observed_label"] = sample.get("label")
+            if sample and sample["code"] not in self.HEALTHY_OBSERVED_STATES:
+                # The observed failure replaces the stored state: what is true now wins over
+                # what was last written.
+                row["health_state"] = sample["code"]
+                row["health_detail"] = sample.get("detail") or (
+                    f"the adapter reports {sample['code']} for this account")
+                row["health_state_basis"] = "observed just now (health probe of this run)"
+            else:
+                row["health_state_basis"] = (
+                    "stored ledger state; the source answered healthy to this run's probe")
         return rows

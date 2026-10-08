@@ -651,29 +651,55 @@ class _AppMixin:
         })
 
     def _disconnected_states(self, sources: list[dict]) -> list[dict]:
+        """Every source condition that needs the owner's attention, with its reason.
+
+        Two things are reported side by side, because they are not the same fact:
+
+        * the state **observed just now** by the adapter's health probe (``health_state``,
+          with what was stored kept in ``stored_health_state``), and
+        * the state **last recorded in the ledger**, when it differs and is itself a
+          condition the owner should see — a revoked permission stays revoked while a
+          source is offline, and neither fact may hide the other (PRD §6, §13, R09, T20).
+        """
         out: list[dict] = []
         healthy = {"connected", "syncing", "current"}
+        permission_ok = ("granted", "not_required")
         for account in sources:
-            if account.get("health_state") in healthy and account.get("permission_state") in (
-                    "granted", "not_required"):
+            observed = account.get("health_state")
+            stored = account.get("stored_health_state")
+            conditions: list[tuple[str, str, str]] = []
+            if observed not in healthy or account.get("permission_state") not in permission_ok:
+                conditions.append((
+                    observed,
+                    account.get("health_detail") or f"source reports {observed}",
+                    "observed just now (health probe of this run)"))
+            if stored and stored != observed and (
+                    stored not in healthy or account.get("permission_state") not in permission_ok):
+                conditions.append((
+                    stored,
+                    account.get("stored_health_detail") or f"the last recorded state was {stored}",
+                    "last state recorded in the ledger (not this run's probe)"))
+            for state, reason, basis in conditions:
+                out.append({
+                    "kind": "source",
+                    "adapter": account.get("adapter"),
+                    "account_id": account.get("account_id"),
+                    "display_name": account.get("display_name"),
+                    "account_identity": account.get("account_identity"),
+                    "state": state,
+                    "reason": reason,
+                    "basis": basis,
+                    "observed_state": observed,
+                    "stored_state": stored,
+                    "next_action": next_action_for(state),
+                    "permission_state": account.get("permission_state"),
+                    "last_success_at": account.get("last_success_at"),
+                    "freshness": human_age(account.get("last_success_at")),
+                    "origin": account.get("origin"),
+                    "mock_label": account.get("mock_label"),
+                })
+            if not conditions:
                 continue
-            state = account.get("health_state")
-            out.append({
-                "kind": "source",
-                "adapter": account.get("adapter"),
-                "account_id": account.get("account_id"),
-                "display_name": account.get("display_name"),
-                "account_identity": account.get("account_identity"),
-                "state": state,
-                "reason": account.get("health_detail")
-                          or f"source reports {state}",
-                "next_action": next_action_for(state),
-                "permission_state": account.get("permission_state"),
-                "last_success_at": account.get("last_success_at"),
-                "freshness": human_age(account.get("last_success_at")),
-                "origin": account.get("origin"),
-                "mock_label": account.get("mock_label"),
-            })
             for capability in account.get("capabilities", []):
                 if capability.get("state") in ("ok",):
                     continue
@@ -1076,6 +1102,19 @@ class _AppMixin:
         if row is None:
             return None
         view = svc.effects.approval_view(row["approval_id"])
+        # The review screen shows the *whole* binding, so the approval's immutable draft
+        # version key and operation ID travel with the bound block, and the audience
+        # hash is named for what it hashes: the recipient snapshot (PRD §10, T13).
+        bound = dict(view.get("bound") or {})
+        hashes = dict(bound.get("hashes") or {})
+        hashes.setdefault("recipients", hashes.get("audience"))
+        bound["hashes"] = hashes
+        bound.setdefault("draft_version_key", view.get("draft_version_key"))
+        bound.setdefault("operation_id", view.get("operation_id"))
+        bound["approval_id"] = view.get("approval_id")
+        bound["owner"] = view.get("owner")
+        bound["scope"] = view.get("scope")
+        view["bound"] = bound
         view["state_binding"] = {
             "invalid": row["approval_state"] not in (ApprovalState.GRANTED,),
             "reason": row["invalidation_reason"],
@@ -1249,9 +1288,13 @@ class _AppMixin:
                 "ORDER BY observed_at", (ws_id,)):
             history.append({
                 "at": row["observed_at"], "kind": "receipt", "actor": "service",
+                # The column is a 0/1 flag in the ledger; the review screen says the word, so
+                # the sentence is readable and unambiguous ("this receipt was not verified
+                # against a real source") rather than a bare "=0" (PRD §10, T15).
                 "text": (f"Receipt: state {row['effect_state']}, verification "
                          f"{row['verification_level']}, delivery {row['delivery_state']}, "
-                         f"verified_against_real_source={row['verified_against_real_source']}"),
+                         f"verified_against_real_source="
+                         f"{bool(row['verified_against_real_source'])}"),
                 "ref": row["effect_id"], "limitations": row["limitations"],
             })
         history.sort(key=lambda entry: entry["at"])
@@ -1388,8 +1431,10 @@ class _AppMixin:
             "source_untouched": before == after,
             "source_state_before": before,
             "source_state_after": after,
-            "source_note": ("Assignment is an application queue filter only: no source message is "
-                            "marked read, archived, muted, deleted or otherwise mutated (PRD §5)."),
+            "source_note": ("Assignment is an application queue filter only (PRD §5): the source "
+                            "message is never marked read, never archived, never muted, never "
+                            "deleted and never otherwise mutated — the provider's own state is "
+                            "read-only here."),
             "published_outbox": published.data["published"] if published else [],
         }
         if res.ok and res.data:
