@@ -283,6 +283,23 @@ class MockSourceAdapter(SourceAdapter):
             "next_action": None if acct["health_state"] == "current" else "grant permission on Mini",
         }))
 
+    def coverage_declaration(self, account_id: str) -> C.Outcome:
+        """What this adapter can say about how complete the data it produced is.
+
+        Deliberately *not* gated by :meth:`_blocked`: whether a source can be reached right
+        now says nothing about how complete the history already held for it is, and a
+        partial history has to stay visible while the source is offline (PRD §6, T09, T20).
+        """
+        partial = "partial_history" in self.faults
+        gap = ("MOCK: injected partial-history fault; this run proves only that the adapter "
+               "reached the end of this query's accessible result set")
+        return self._out(C.Outcome.ok({
+            "account_id": account_id,
+            "coverage_state": "partial_history" if partial else "fixture_scan",
+            "gap_reason": gap if partial else None,
+            "note": ("MOCK: a declaration about the fixture corpus, not a real mailbox scan"),
+        }, account_id=account_id))
+
     def accounts(self) -> C.Outcome:
         blocked = self._blocked()
         if blocked:
@@ -584,6 +601,12 @@ class MockHermesAdapter(SourceAdapter):
         return self._out(C.Outcome.ok({"health_state": "current",
                                        "note": "MOCK runtime; the installed build is unknown"},
                                       account_id=account_id))
+
+    def coverage_declaration(self, account_id: str) -> C.Outcome:
+        # A runtime has runs, not an enumerable history, so it declares no coverage state.
+        return self._out(C.Outcome.unsupported(
+            "MOCK: Hermes has sessions and runs, not enumerable history, so it declares no "
+            "coverage state"))
 
     def accounts(self) -> C.Outcome:
         return self._out(C.Outcome.ok({"accounts": self._mock_rows(
