@@ -43,7 +43,7 @@ FIXTURE_REF = make_ref(FIXTURE_ACCOUNT, FIXTURE_MAILBOX, "101")
 #: Commands whose document is an adapter outcome (``Outcome.to_dict()``).
 OUTCOME_COMMANDS = ("health", "accounts", "mailboxes", "list", "fetch")
 
-ROW_STATES = tuple(O.ADAPTER_OUTCOMES) + ("harness_error",)
+ROW_STATES = (tuple(O.ADAPTER_OUTCOMES) + ("harness_error", O.PROBE_UNMEASURED))
 RUN_EVENTS = ("worker_start", "poll", "worker_stop", "startup_failed", "backing_off",
               "harness_failure")
 #: Capabilities this slice deliberately does not build: they refuse by design, not
@@ -81,6 +81,16 @@ def json_documents(proc: subprocess.CompletedProcess, case: str) -> list:
             raise AssertionError(f"{case}: stdout line {index + 1} is not an object")
         documents.append(document)
     return documents
+
+
+def documented_rows(rows: list) -> list:
+    """Rows read out of the Gate 2 probe pack: they contacted nothing, on any host."""
+    return [r for r in rows if r["origin"] == O.DOCUMENTATION]
+
+
+def measured_rows(rows: list) -> list:
+    """Rows this host produced itself (fixture or real), not documentation reads."""
+    return [r for r in rows if r["origin"] != O.DOCUMENTATION]
 
 
 def values_of(document, key: str) -> list:
@@ -148,14 +158,29 @@ class TestEveryCommandRealMode(CliCaseMixin, unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         rows = json_documents(proc, "real probe")
         self.assertEqual([r["capability"] for r in rows], list(CAPABILITY_NAMES))
+        documented = documented_rows(rows)
+        measured = measured_rows(rows)
+        self.assertTrue(documented, "the documented capabilities must still be reported")
+        self.assertTrue(measured)
         for row in rows:
             missing = [f for f in ROW_FIELDS + ROW_LABELLING_FIELDS if f not in row]
             self.assertEqual(missing, [], f"{row['capability']} is missing {missing}")
             self.assertIn(row["state"], ROW_STATES)
+            self.assertFalse(row["real_source_connected"], row["capability"])
+        for row in documented:
+            # a page read is not a measurement on any host, including this one
+            self.assertFalse(row["supported"], row["capability"])
+            self.assertEqual(row["state"], O.PROBE_UNMEASURED)
+            self.assertFalse(row["adapter_is_real"], row["capability"])
+            self.assertFalse(row["values_from_source"], row["capability"])
+            self.assertTrue(O.is_documentation_label(row["label"]), row["label"])
+            self.assertTrue(row["citations"], row["capability"])
+        for row in measured:
             # the real adapter answered on a host where it cannot read Mail
             self.assertTrue(row["adapter_is_real"])
-            self.assertFalse(row["real_source_connected"])
             self.assertFalse(row["values_from_source"])
+            self.assertEqual(list(row["citations"]), [],
+                             "only a documentation row may cite the pack")
             if row["capability"] == "manifest":
                 # ... except the manifest row, which describes the worker itself and so
                 # can be supported while holding no source value.
@@ -254,12 +279,29 @@ class TestEveryCommandFixtureMode(CliCaseMixin, unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         rows = json_documents(proc, "fixture probe")
         self.assertEqual([r["capability"] for r in rows], list(CAPABILITY_NAMES))
-        for row in rows:
-            self.assertEqual(row["origin"], O.FIXTURE)
-            self.assertFalse(row["adapter_is_real"])
-            self.assertFalse(row["real_source_connected"])
-            self.assertTrue(O.is_fixture_label(row["label"]))
-            self.assertIn("No Mail.app was contacted", row["disclaimer"])
+        documented = documented_rows(rows)
+        measured = measured_rows(rows)
+        self.assertTrue(measured)
+        self.assertTrue(documented)
+        for row in measured:
+            with self.subTest(capability=row["capability"]):
+                self.assertEqual(row["origin"], O.FIXTURE)
+                self.assertFalse(row["adapter_is_real"])
+                self.assertFalse(row["real_source_connected"])
+                self.assertTrue(O.is_fixture_label(row["label"]))
+                self.assertIn("No Mail.app was contacted", row["disclaimer"])
+        for row in documented:
+            # Recorded fixtures answer ``fixture``; the pack rows contacted nothing at all on
+            # any host, so they are ``documentation`` -- and never supported.
+            with self.subTest(capability=row["capability"]):
+                self.assertEqual(row["origin"], O.DOCUMENTATION)
+                self.assertNotEqual(row["source"], "mail")
+                self.assertFalse(row["supported"])
+                self.assertEqual(row["state"], O.PROBE_UNMEASURED)
+                self.assertFalse(row["adapter_is_real"])
+                self.assertFalse(row["real_source_connected"])
+                self.assertTrue(O.is_documentation_label(row["label"]), row["label"])
+                self.assertTrue(row["citations"], row["capability"])
         self.assertNoSourceClaimed(rows, "fixture probe")
 
     def test_run(self) -> None:
@@ -347,7 +389,12 @@ class TestFlagPositions(unittest.TestCase):
         rows_after = json_documents(after, "probe --fixture-mode")
         self.assertEqual([r["capability"] for r in rows_before],
                          [r["capability"] for r in rows_after])
-        self.assertEqual([r["origin"] for r in rows_after], [O.FIXTURE] * len(rows_after))
+        # The Beeper/Contacts/Hermes rows are documentation reads (never fixtures) and are
+        # asserted separately; every row this machine actually produced is a labelled fixture.
+        fixture_origins = [r["origin"] for r in rows_after if r["origin"] != O.DOCUMENTATION]
+        self.assertEqual(fixture_origins, [O.FIXTURE] * len(fixture_origins))
+        self.assertTrue(all(r["origin"] == O.DOCUMENTATION for r in rows_after
+                            if r["source"] != "mail"))
         self.assertEqual([r["state"] for r in rows_before],
                          [r["state"] for r in rows_after])
 

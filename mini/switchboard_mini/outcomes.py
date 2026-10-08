@@ -65,13 +65,21 @@ from typing import Any, Optional
 
 REAL = "real"
 FIXTURE = "fixture"
+DOCUMENTATION = "documentation"
 FIXTURE_LABEL_PREFIX = "FIXTURE:"
+DOCUMENTATION_LABEL_PREFIX = "DOCUMENTATION:"
 
 REAL_DISCLAIMER = None
 FIXTURE_DISCLAIMER = (
     "FIXTURE — answered from a recorded result shipped in this repository in "
     "--fixture-mode. No Mail.app was contacted and no mailbox was read; these are not "
     "observations of any real mailbox or account."
+)
+DOCUMENTATION_DISCLAIMER = (
+    "DOCUMENTATION — recorded from a public reference page in the Gate 2 probe pack, not "
+    "from this machine or Randy's. No source was contacted by this row and no capability "
+    "is claimed: it carries the documented surface, the documented silences and the "
+    "procedure that would measure it."
 )
 
 
@@ -84,6 +92,45 @@ def fixture_label(adapter: str, detail: Optional[str] = None) -> str:
 
 def is_fixture_label(value: Any) -> bool:
     return isinstance(value, str) and value.startswith(FIXTURE_LABEL_PREFIX)
+
+
+def documentation_label(source: str, citations=()) -> str:
+    """``DOCUMENTATION:beeper(O05,O11)`` — what a documentation-backed row is labelled."""
+    label = f"{DOCUMENTATION_LABEL_PREFIX}{source}"
+    if citations:
+        label = f"{label}({','.join(citations)})"
+    return label
+
+
+def is_documentation_label(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith(DOCUMENTATION_LABEL_PREFIX)
+
+
+def disclaimer_for(origin: str) -> Optional[str]:
+    """The one disclaimer for each non-real origin. Never a real-source claim."""
+    if origin == FIXTURE:
+        return FIXTURE_DISCLAIMER
+    if origin == DOCUMENTATION:
+        return DOCUMENTATION_DISCLAIMER
+    return REAL_DISCLAIMER
+
+
+def probe_row_supported_claim_allowed(row: dict) -> bool:
+    """May this probe row carry ``supported: true``?
+
+    One rule, and it is the probe pack's scope statement: **a documentation read can
+    never set ``supported: true``**. A row whose evidence is a page is a question, not a
+    measurement, so it is ``unmeasured`` until something observes it.
+
+    Grace holds the identical rule at write time
+    (``grace/contracts.py::probe_row_supported_claim_allowed``); ``tests/
+    test_shared_vocabulary.py`` asserts the two agree.
+    """
+    if not row.get("supported"):
+        return True
+    if row.get("origin") == DOCUMENTATION:
+        return False
+    return True
 
 
 # ----------------------------------------------------------------- typed codes --
@@ -110,6 +157,24 @@ COVERAGE_COMPLETE = "complete"
 COVERAGE_PARTIAL_HISTORY = "partial_history"
 COVERAGE_UNKNOWN = "unknown"
 
+# ---------------------------------------------------------------- probe rows ----
+#: A probe row's typed state vocabulary: the adapter outcome codes above, plus
+#: ``unmeasured`` for a capability whose own assertion was never evaluated (a
+#: documentation read, a single-page mailbox, a message with no attachments). ``unmeasured``
+#: is deliberately neither ``supported`` nor a claim about the source: the question is
+#: open, which is different from ``unsupported``.
+PROBE_UNMEASURED = "unmeasured"
+PROBE_ROW_STATES = ADAPTER_OUTCOMES + (PROBE_UNMEASURED,)
+
+#: ``observed_version`` reports this literal when the row did not observe a version. A
+#: version is never borrowed from another row's read (see ``probe._row``).
+VERSION_NOT_OBSERVED = "not_observed"
+
+#: Row origins. ``real`` = produced on this host by the real adapter; ``fixture`` =
+#: answered from a recorded result; ``documentation`` = read out of the Gate 2 probe pack,
+#: which may never carry ``supported: true``.
+PROBE_ROW_ORIGINS = (REAL, FIXTURE, DOCUMENTATION)
+
 
 # ------------------------------------------------------------ permission states --
 
@@ -120,7 +185,13 @@ PERMISSION_NOT_APPLICABLE = "not_applicable"
 
 PERMISSION_STATES = (PERMISSION_GRANTED, PERMISSION_STATE_DENIED,
                      PERMISSION_NOT_DETERMINED, PERMISSION_NOT_APPLICABLE)
-# NOTE: the outcome code for a denied operation is ``PERMISSION_DENIED``
+# NOTE (2026-10-08): this is the **single closed permission vocabulary** for the whole
+# product. Grace carries the same four values (``grace/contracts.py::PERMISSION_STATES``)
+# and ``tests/test_shared_vocabulary.py`` fails if the two ever drift. The probe used to
+# emit ``not_applicable`` while Grace's schema comment and web layer expected
+# ``not_required``/``unknown``, so a granted-by-absence source was read as a problem;
+# ``not_applicable`` is the one spelling that survives.
+# The outcome code for a denied operation is a different thing: ``PERMISSION_DENIED``
 # ("permission_denied", above). PERMISSION_STATE_DENIED is the *permission_state* value
 # reported on a probe row, which is the state of the macOS Automation grant itself.
 

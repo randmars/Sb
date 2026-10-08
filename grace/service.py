@@ -22,7 +22,7 @@ from .adapters import SourceAdapter, default_adapters
 from .contracts import JobState, OpResult, QueueState, ReviewState
 from .effects import Effects, InjectedFault
 from .fixtures import build_corpus, scenario_names
-from .ingest import Ingest
+from .ingest import Ingest, probe_provenance, stored_probe_rows
 from .ledger import Ledger
 from .rules import Rules
 from .store import DEFAULT_DB, Store
@@ -262,6 +262,26 @@ class Grace:
         """
         return self.ledger.all_conversations(limit, include_deleted=include_deleted)
 
+    def capability_honesty(self) -> dict:
+        """The honest capability statement for this ledger, derived from its probe rows."""
+        provenance = probe_provenance(stored_probe_rows(self.store))
+        if provenance["no_source_contacted"]:
+            explanation = ("This deployment has no measured Mail, Beeper, Contacts or Hermes "
+                           "connection: " + provenance["statement"] + " Those integrations are "
+                           "Gate 2/3 work on Randy's Mac and have not been exercised here.")
+        else:
+            explanation = provenance["statement"]
+        return {
+            "real_sources_connected": bool(provenance["real_source_connected"]),
+            "explanation": explanation,
+            "rows": provenance["rows"],
+            "unmeasured_rows": provenance["unmeasured"],
+            "documentation_rows": provenance["documentation_rows"],
+            "supported_rows": provenance["supported"],
+            "statement": provenance["statement"],
+            "unsupported_states_are_explicit": True,
+        }
+
     def health(self) -> dict:
         mocked = any(a.simulated for a in self.adapters.values())
         data = {
@@ -269,13 +289,9 @@ class Grace:
             "queues": self.ledger.counts(),
             "adapters": [a.describe() for a in self.adapters.values()],
             "sources": self.ingest.source_health(),
-            "capability_honesty": {
-                "real_sources_connected": False,
-                "explanation": ("This deployment has no Mail, Beeper, Contacts or Hermes connection. "
-                                "Those integrations are Gate 2/3 work on Randy's Mac and have not "
-                                "been exercised here."),
-                "unsupported_states_are_explicit": True,
-            },
+            # Derived from the stored capability rows (Gate 2), never asserted: the wording
+            # changes the moment a row records that a real source answered it.
+            "capability_honesty": self.capability_honesty(),
         }
         return {"data": data, "mocked": mocked,
                 "mock_label": C.mock_label("adapters") if mocked else None,

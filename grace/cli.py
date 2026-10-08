@@ -28,6 +28,7 @@ from typing import Any, Optional
 from . import contracts as C
 from .effects import InjectedFault
 from .fixtures import scenario_names
+from .ingest import import_probe_rows
 from .service import Grace
 from .store import DEFAULT_DB
 
@@ -188,6 +189,14 @@ def _build_parser() -> argparse.ArgumentParser:
     ex = sub.add_parser("export-fixtures",
                         help="write the labelled fixture corpus as JSON for other components")
     ex.add_argument("--out", default="fixtures")
+    pi = sub.add_parser(
+        "probe-import",
+        help="store one Mini capability-probe run (Gate 2) against an account, refusing any "
+             "row that over-claims")
+    pi.add_argument("--file", required=True,
+                    help="a JSON document with a 'rows' list (switchboard-mini probe --json)")
+    pi.add_argument("--account", required=True, help="the source_account_id these rows describe")
+    pi.add_argument("--actor", default="probe-import")
 
     rs = sub.add_parser("rule-save", help="save a sender rule (no send authority)")
     rs.add_argument("--sender", required=True)
@@ -305,6 +314,23 @@ def _dispatch(svc: Grace, args: argparse.Namespace, cmd: str, pretty: bool) -> i
         return _print(emit(cmd, data={"checkpoints": svc.ingest.coverage()}), pretty)
     if cmd == "source-health":
         return _print(emit(cmd, data={"sources": svc.ingest.source_health()}), pretty)
+    if cmd == "probe-import":
+        document = json.loads(Path(args.file).read_text())
+        rows = document["rows"] if isinstance(document, dict) else document
+        # Above the store: a malformed or over-claiming document is a typed refusal, never a
+        # partial import and never an exception.
+        result = import_probe_rows(svc.store, args.account, rows, actor=args.actor)
+        if result["ok"]:
+            svc.store.audit(actor=args.actor, operation="probe_import",
+                            entity_kind="source_account", entity_id=args.account,
+                            reason=f"{result['imported']} capability row(s) imported",
+                            details={"imported": result["imported"],
+                                     "provenance": result["provenance"]})
+        return _print(emit(cmd, ok=result["ok"], data=result,
+                           message=(f"{result['imported']} probe row(s) stored for "
+                                    f"{args.account}" if result["ok"] else
+                                    f"refused: {len(result['problems'])} problem(s), nothing "
+                                    f"stored")), pretty)
     if cmd == "reap":
         reaped = svc.ledger.reap_expired_leases()
         return _print(emit(cmd, data={"reaped": reaped, "counts": svc.ledger.counts()},

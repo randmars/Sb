@@ -44,12 +44,49 @@ def is_mock_label(value: Any) -> bool:
     return isinstance(value, str) and value.startswith(MOCK_LABEL_PREFIX)
 
 
+#: A third origin, added for the Gate 2 probe rows whose evidence is a public reference
+#: page rather than a source read (probe-pack scope statement: "A documentation read can
+#: never set ``supported: true``"). It is a *labelled* origin, like ``mock``: a
+#: documentation row must carry a ``DOCUMENTATION:`` label and may never claim a capability.
+DOCUMENTATION = "documentation"
+DOCUMENTATION_LABEL_PREFIX = "DOCUMENTATION:"
+
+
+def documentation_label(source: str, citations: Iterable[str] | None = None) -> str:
+    """``DOCUMENTATION:beeper(O05,O11)`` -- the label a documentation row must carry."""
+    label = f"{DOCUMENTATION_LABEL_PREFIX}{source}"
+    cites = list(citations or [])
+    if cites:
+        label = f"{label}({','.join(cites)})"
+    return label
+
+
+def is_documentation_label(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith(DOCUMENTATION_LABEL_PREFIX)
+#: The Mini worker's own vocabulary for a recorded-fixture answer is ``fixture`` with a
+#: ``FIXTURE:`` label (Grace's own mock data is ``mock``/``MOCK:``). Both are accepted as
+#: labelled origins so a probe row keeps the worker's honest spelling instead of being
+#: rewritten into a different one on import.
+FIXTURE = "fixture"
+FIXTURE_LABEL_PREFIX = "FIXTURE:"
+
+
+def is_fixture_label(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith(FIXTURE_LABEL_PREFIX)
+
+
 def assert_labelled(origin: str, label: Any, where: str) -> None:
     """Enforce the labelling invariant. Raises AssertionError (a bug, not a state)."""
-    if origin not in (MOCK, REAL):
-        raise AssertionError(f"{where}: origin must be 'mock' or 'real', got {origin!r}")
+    if origin not in (MOCK, REAL, DOCUMENTATION, FIXTURE):
+        raise AssertionError(f"{where}: origin must be 'mock', 'real', 'fixture' or "
+                             f"'documentation', got {origin!r}")
     if origin == MOCK and not is_mock_label(label):
         raise AssertionError(f"{where}: mocked value is not labelled (mock_label={label!r})")
+    if origin == DOCUMENTATION and not is_documentation_label(label):
+        raise AssertionError(f"{where}: documentation value is not labelled "
+                             f"(label={label!r})")
+    if origin == FIXTURE and not is_fixture_label(label):
+        raise AssertionError(f"{where}: fixture value is not labelled (label={label!r})")
 
 
 def find_unlabelled_mock(obj: Any, path: str = "$") -> list[str]:
@@ -61,6 +98,14 @@ def find_unlabelled_mock(obj: Any, path: str = "$") -> list[str]:
             is_mock_label(obj.get("mock_label")) or is_mock_label(obj.get("label"))
         ):
             problems.append(f"{path}: origin=mock without a MOCK: label")
+        if origin == DOCUMENTATION and not (
+            is_documentation_label(obj.get("label"))
+            or is_documentation_label(obj.get("mock_label"))):
+            problems.append(f"{path}: origin=documentation without a DOCUMENTATION: label")
+        if origin == FIXTURE and not (
+            is_fixture_label(obj.get("label"))
+            or is_fixture_label(obj.get("mock_label"))):
+            problems.append(f"{path}: origin=fixture without a FIXTURE: label")
         for key, value in obj.items():
             problems.extend(find_unlabelled_mock(value, f"{path}.{key}"))
     elif isinstance(obj, (list, tuple)):
@@ -153,6 +198,57 @@ RETRYABLE_READ_OUTCOMES = frozenset({OFFLINE, RATE_LIMITED, RETRYABLE_ERROR, PAR
 RETRYABLE_EFFECT_OUTCOMES = frozenset({OFFLINE, RATE_LIMITED, RETRYABLE_ERROR})
 
 HONEST_EMPTY_ALLOWED = True  # a successful read may legitimately return nothing
+
+# ------------------------------------------------------- permission vocabulary ---
+#: The **single closed permission vocabulary** for the whole product. The Mini worker
+#: carries the identical four values (``switchboard_mini/outcomes.py::PERMISSION_STATES``)
+#: and ``tests/test_shared_vocabulary.py`` fails if the two drift. Before this was settled
+#: the probe emitted ``not_applicable`` while this schema and the web layer expected
+#: ``not_required``/``unknown``, so a source that legitimately needs no macOS grant was
+#: read as a problem (and one filter matched a value no row ever emitted).
+PERMISSION_GRANTED = "granted"
+PERMISSION_STATE_DENIED = "denied"
+PERMISSION_NOT_DETERMINED = "not_determined"
+PERMISSION_NOT_APPLICABLE = "not_applicable"
+
+PERMISSION_STATES = (PERMISSION_GRANTED, PERMISSION_STATE_DENIED,
+                     PERMISSION_NOT_DETERMINED, PERMISSION_NOT_APPLICABLE)
+#: Permission states under which a source is not itself a condition the owner must see.
+PERMISSION_OK_STATES = (PERMISSION_GRANTED, PERMISSION_NOT_APPLICABLE)
+
+
+# ------------------------------------------------------------- probe rows -------
+#: A probe row's typed state vocabulary: the adapter outcome codes above, plus
+#: ``unmeasured`` (the capability's own assertion was never evaluated: a documentation
+#: read, a single-page mailbox, a message with no attachments).
+PROBE_UNMEASURED = "unmeasured"
+#: The Mini worker reports a probe bug in its own harness this way; it is a statement about
+#: the instrument, never about a source.
+PROBE_HARNESS_ERROR = "harness_error"
+PROBE_ROW_STATES = ADAPTER_OUTCOMES + (PROBE_UNMEASURED, PROBE_HARNESS_ERROR)
+#: ``observed_version``'s value when the row did not observe a version itself.
+VERSION_NOT_OBSERVED = "not_observed"
+#: The row origins a probe may report: real adapter / recorded fixture / documentation.
+PROBE_ROW_ORIGINS = (REAL, "fixture", DOCUMENTATION)   # Grace names its mock origin "mock"
+
+
+def probe_row_supported_claim_allowed(row: Mapping[str, Any]) -> bool:
+    """May this probe row be stored with ``supported: true``?
+
+    One rule, and it is the probe pack's scope statement: **a documentation read can never
+    set ``supported: true``**, because origin ``documentation`` means the evidence is a page,
+    not an observation. This is enforced at write time by
+    :meth:`grace.ingest.Ingest.import_probe_rows`, which refuses the whole import rather
+    than storing one over-claiming row.
+
+    The Mini worker holds the identical rule (``outcomes.probe_row_supported_claim_allowed``)
+    and ``tests/test_shared_vocabulary.py`` asserts the two agree.
+    """
+    if not row.get("supported"):
+        return True
+    if row.get("origin") == DOCUMENTATION:
+        return False
+    return True
 
 
 @dataclass

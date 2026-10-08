@@ -27,6 +27,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from grace import contracts as C                     # noqa: E402
+from grace import web as W                           # noqa: E402
+from grace.ingest import Ingest                      # noqa: E402
 from grace.service import Grace                      # noqa: E402
 from grace.web import COOKIE_NAME, WebApp            # noqa: E402
 
@@ -747,6 +750,124 @@ class TestTypedDisconnectedStates(WebCase):
         entry = denied[0]
         self.assertIn("permission", entry["reason"].lower())
         self.assertIn("permission", entry["next_action"].lower())
+
+
+# ------------------------------------ one vocabulary per source of truth ---
+
+
+class TestConditionVocabularyPinsBothDirections(WebCase):
+    """An observed outcome code and a stored source state are different languages.
+
+    The regression this pins: the ledger's healthy-*source* vocabulary was applied to the
+    adapter's *observed* code, so a source whose probe answered ``ok`` was listed to the
+    owner as a degraded condition whose ``state`` was the raw code ``ok`` and whose
+    ``next_action`` was ``None``. Both directions are pinned here -- a healthy source must
+    not be listed at all, and a genuinely disconnected one must be listed with its reason
+    and the smallest next action.
+    """
+
+    @staticmethod
+    def source(**kw) -> dict:
+        base = {"adapter": "mock_mail", "account_id": "acct_pin", "display_name": "Pin",
+                "health_state": "current", "stored_health_state": "current",
+                "observed_health_state": "ok", "health_detail": None,
+                "permission_state": "granted", "capabilities": []}
+        base.update(kw)
+        return base
+
+    def states(self, *sources) -> list:
+        return self.app._disconnected_states(list(sources))
+
+    def test_a_healthy_observed_code_is_not_a_condition(self) -> None:
+        for code in ("ok", "success", "connected", "syncing", "current"):
+            with self.subTest(observed=code):
+                self.assertEqual(
+                    self.states(self.source(observed_health_state=code)), [],
+                    f"a source observed {code!r} is healthy and must not be listed")
+
+    def test_a_healthy_capability_row_is_not_a_condition(self) -> None:
+        for state in ("ok", "success"):
+            with self.subTest(state=state):
+                capability = {"name": "account_enumeration", "supported": True,
+                              "state": state, "limitation": None}
+                self.assertEqual(
+                    self.states(self.source(capabilities=[capability])), [],
+                    f"a supported capability observed {state!r} must not be listed")
+
+    def test_a_disconnected_source_is_listed_with_reason_and_next_action(self) -> None:
+        for code in ("offline", "permission_denied", "unsupported", "rate_limited",
+                     "outcome_unknown", "token_reset"):
+            with self.subTest(observed=code):
+                listed = self.states(self.source(observed_health_state=code,
+                                                 health_detail=f"the probe said {code}"))
+                self.assertEqual(len(listed), 1, listed)
+                entry = listed[0]
+                self.assertEqual(entry["state"], code)
+                self.assertEqual(entry["raw_state"], code)
+                self.assertEqual(entry["reason"], f"the probe said {code}")
+                self.assertTrue(entry["next_action"])
+                self.assertEqual(entry["next_action"], W.next_action_for(code))
+
+    def test_a_revoked_permission_is_named_as_a_permission_condition(self) -> None:
+        """Transport healthy, permission revoked: the condition is the permission, not 'ok'."""
+        listed = self.states(self.source(observed_health_state="ok", stored_health_state="ok",
+                                         permission_state="denied"))
+        self.assertEqual([e["state"] for e in listed], ["permission_denied"], listed)
+        self.assertTrue(listed[0]["next_action"])
+
+    def test_a_state_outside_every_vocabulary_is_not_rendered_as_itself(self) -> None:
+        listed = self.states(self.source(observed_health_state="a_code_from_nowhere",
+                                         health_detail="an unknown code"))
+        self.assertEqual([e["state"] for e in listed], ["unknown"], listed)
+        self.assertEqual(listed[0]["raw_state"], "a_code_from_nowhere")
+        self.assertTrue(listed[0]["next_action"])
+
+    def test_no_listed_state_is_outside_the_typed_condition_vocabulary(self) -> None:
+        listed = self.states(
+            self.source(observed_health_state="ok"),
+            self.source(account_id="acct_b", observed_health_state="a_code_from_nowhere"),
+            self.source(account_id="acct_c", observed_health_state="ok",
+                        permission_state="denied"),
+            self.source(account_id="acct_d", observed_health_state="ok",
+                        capabilities=[{"name": "x", "supported": False, "state": "ok"},
+                                      {"name": "y", "supported": False,
+                                       "state": "unmeasured"}]),
+        )
+        self.assertTrue(listed)
+        for entry in listed:
+            with self.subTest(entry=entry.get("state")):
+                self.assertIn(entry["state"], W.CONDITION_STATES, entry)
+                self.assertTrue(entry["next_action"], entry)
+
+
+class TestNextActionCoversEveryEmittedState(unittest.TestCase):
+    """A typed condition with no next action is not something the owner can act on."""
+
+    def test_the_condition_vocabulary_is_exactly_next_actions(self) -> None:
+        self.assertEqual(tuple(W.NEXT_ACTIONS), W.CONDITION_STATES)
+        self.assertTrue(W.CONDITION_STATES)
+
+    def test_every_state_the_layers_can_emit_has_a_next_action(self) -> None:
+        emitted = set(Ingest.TRANSPORT_STATES.values())          # source health axes
+        emitted |= set(Ingest.HEALTHY_SOURCE_STATES)             # stored source states
+        emitted |= set(Ingest.HEALTHY_OBSERVED_STATES)           # observed outcome codes
+        emitted |= set(C.PROBE_ROW_STATES)                       # probe rows in the ledger
+        emitted |= set(C.ADAPTER_OUTCOMES)
+        emitted |= {"unknown", "unmeasured", "harness_error", "partial_history"}
+        for state in sorted(emitted):
+            with self.subTest(state=state):
+                rendered = W.condition_state(state)
+                self.assertIn(rendered, W.NEXT_ACTIONS)
+                self.assertTrue(W.next_action_for(rendered))
+
+    def test_every_permission_state_maps_to_something_actionable(self) -> None:
+        for permission in C.PERMISSION_STATES:
+            with self.subTest(permission=permission):
+                condition = W.PERMISSION_CONDITIONS.get(permission, "unknown")
+                if permission in C.PERMISSION_OK_STATES:
+                    self.assertNotIn(permission, W.PERMISSION_CONDITIONS)
+                    continue
+                self.assertTrue(W.next_action_for(condition), condition)
 
 
 # --------------------------------------------------------------------- odds ---

@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS source_account (
   enabled_operations TEXT NOT NULL DEFAULT '[]',-- JSON array of capability names
   health_state      TEXT NOT NULL,              -- connected|syncing|current|delayed|permission_denied|offline|error|partial_history
   health_detail     TEXT,
-  permission_state  TEXT NOT NULL,              -- granted|denied|unknown|not_required
+  permission_state  TEXT NOT NULL,              -- granted|denied|not_determined|not_applicable
+                                                -- (one vocabulary: contracts.PERMISSION_STATES)
   last_success_at   TEXT,
   last_probe_at     TEXT,
   origin            TEXT NOT NULL,              -- mock|real
@@ -40,13 +41,24 @@ CREATE TABLE IF NOT EXISTS capability (
   account_id      TEXT NOT NULL REFERENCES source_account(account_id),
   name            TEXT NOT NULL,                -- e.g. 'enumerate','retrieve','history_poll',
                                                 -- 'materialize_attachment','prepare_draft','dispatch','reconcile'
+                                                -- plus the Mini probe's own capability names
   supported       INTEGER NOT NULL,             -- 1|0  (unsupported must be explicit, PRD §6)
-  state           TEXT NOT NULL,                -- ok|unsupported|permission_denied|unverified
+  state           TEXT NOT NULL,                -- ok|unsupported|permission_denied|unverified|unmeasured
   limitation      TEXT,
   probe_method    TEXT,
   observed_at     TEXT,
-  origin          TEXT NOT NULL,
+  origin          TEXT NOT NULL,                -- real|mock|documentation (contracts.assert_labelled)
   mock_label      TEXT,
+  -- The full probe-row contract from `probe-pack/00-TEMPLATE.md`. Without these a real
+  -- measurement on Randy's Mac lands nowhere: what a row observed, what it was allowed to
+  -- do, what it claimed, and whether a real source actually answered.
+  observed_version      TEXT,                   -- the version THIS row observed, or 'not_observed'
+  permission            TEXT,                   -- granted|denied|not_determined|not_applicable
+  probe_assertion       TEXT,                   -- what supported=1 claims was observed
+  evidence              TEXT,                   -- JSON: what was actually observed
+  values_from_source    INTEGER,                -- 1 only when the row answered with source data
+  real_source_connected INTEGER,                -- 1 only when a real source was contacted
+  sourced_refs          TEXT,                   -- JSON: probe-pack refs (O01-O22) a documentation row quotes
   PRIMARY KEY (account_id, name)
 );
 

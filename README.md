@@ -59,7 +59,7 @@ source; where it has not, the product shows an explicit typed state.*
 |---|---|---|
 | Grace service, ledger, approvals, effects, rules, ingest | **Executed for real here** — real SQLite, real transactions, real process restarts | — |
 | CLI and its JSON output | **Executed for real here** | — |
-| Test suite (`tests/`, 209 tests) | **Executed for real here** (all pass) | — |
+| Test suite (`tests/`, 255 tests) | **Executed for real here** (all pass) | — |
 | Mail / Beeper / Contacts / Hermes adapters | **Mock only** (`MockMailAdapter`, `MockBeeperAdapter`, `MockContactsAdapter`, `MockHermesAdapter`), labelled `MOCK:` | The real adapters, the capability manifests they return, permissions, versions, latency (PRD §11, §14 Gate 2) |
 | Agent runs (the "MOCK worker pass") | **Simulated**; produces a labelled draft, never an external message | Real Hermes sessions/runs/progress/stop (Gate 3) |
 | Sends, dispatch results, receipts | **Simulated end to end.** `verified_against_real_source = 0` on every receipt | Real outbound operation and reconciled receipt (Gate 3) |
@@ -150,7 +150,7 @@ and checks it: every R01–R16 claimed exactly once, every file path real.
 
 | Method | Purpose |
 |---|---|
-| `manifest()` | versioned capability manifest: per capability `supported`, `permission_required`, `permission_state`, `limit`, `latency_ms`, `rate_limit`, `probe_method`, `probe_assertion`, `limitation`. A capability that is not declared is never simulated. |
+| `manifest()` | versioned capability manifest: `manifest_version`, `adapter`, `adapter_version`, `host_role`, `simulated` (with `mock_label` and `disclaimer` when simulated), and per capability `supported`, `state`, `limitation`, `probe_method` — plus `probe_assertion`, `permission_state`, `observed_version`, `source`, `citations` and `values_from_source` once a Mini-worker probe row has been folded in. A capability that is not declared is never simulated. Nothing else is listed here: `permission_required`, `limit`, `latency_ms` and `rate_limit` were in this row for a while and no adapter has ever emitted them, so they are gone rather than promised. |
 | `health(account_id)` | typed health: connected, permission denied, offline, degraded, partial history |
 | `accounts()` | account inventory with owner identity, enabled operations, health |
 | `enumerate(account, scope, cursor, limit)` | bounded enumeration with coverage state and a cursor |
@@ -303,7 +303,7 @@ mock adapters.
 ## Tests
 
 ```bash
-python3 -m unittest discover -s tests -t .           # 209 tests, no third-party dependency
+python3 -m unittest discover -s tests -t .           # 255 tests, no third-party dependency
 ```
 
 The five required scenarios:

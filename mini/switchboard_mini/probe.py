@@ -3,26 +3,42 @@
 The row contract (PRD §11 probe matrix, PRD §6 capability manifest):
 
     capability        stable name of the capability being probed
-    supported         true only when the probe observed the capability working
-    permission_state  granted | denied | not_determined | not_applicable
-    observed_version  the version actually seen (Mail.app build, or the worker itself)
+    supported         true only when *this row's own* ``probe_assertion`` was evaluated
+                      and held. Never true for a row whose evidence is a documentation
+                      read (see ``documented_capabilities.py``)
+    permission_state  one closed vocabulary, shared with Grace:
+                      ``granted`` | ``denied`` | ``not_determined`` | ``not_applicable``
+                      (``switchboard_mini.outcomes.PERMISSION_STATES``)
+    observed_version  the version this row observed from the source it probed, or the
+                      literal ``not_observed`` with the reason in
+                      ``observed_version_reason``. A row that never touched Mail may not
+                      borrow Mail's bundle version: only the ``health`` row reads it, and
+                      only the ``manifest`` row reports the worker's own version
     probe_method      how the worker tried to establish this
     probe_assertion   what "supported: true" is claiming to have been observed
     limitation        what is known not to hold, or why the row is unsupported
     evidence          what was actually observed, with mailbox content fingerprinted
 
-plus the labelling fields every worker document carries: ``origin`` ('real' only when
-this run produced the row on this host), ``state`` (the typed outcome), ``label`` and
-``disclaimer`` for fixture rows.
+plus the labelling fields every worker document carries: ``origin`` (``real`` only when
+this run produced the row on this host, ``fixture`` for a recorded scenario,
+``documentation`` for a row read out of the Gate 2 probe pack), ``state`` (the typed
+outcome, or ``unmeasured``), ``source`` (which source the row is about), ``citations``
+(the pack refs ``O01``-``O22`` a documentation row quotes), ``label`` and ``disclaimer``.
 
-Two rules the code enforces:
+Four rules the code now enforces, each because the earlier code could state something it
+had not measured:
 
 * A capability the probe cannot confirm comes back ``supported: false`` with a typed
   reason. There is no code path that sets ``supported: true`` without an observation.
-* A capability this slice deliberately does not implement (sending, drafting,
-  reconciliation, attachment materialisation) is ``supported: false`` with
-  ``state='not_implemented'`` and the probe records the adapter's actual refusal, so the
-  row shows a demonstrated absence rather than a claim about Mail.
+* ``supported: true`` requires the row's **own** assertion to have been evaluated. A
+  single-page mailbox is not evidence of resumable iteration, a mailbox whose true count
+  was never read is not evidence of bounded listing, and a message with no attachments
+  is not evidence of attachment enumeration -- those rows are ``unmeasured`` instead.
+* ``observed_version`` is reported only by a row that observed that version. Every other
+  row carries ``not_observed`` and says why.
+* A documentation-origin row can never be ``supported`` (probe-pack scope statement:
+  "A documentation read can never set ``supported: true``"). ``_row`` refuses to build
+  one, and Grace refuses to store one.
 
 Exit status: the probe process exits non-zero only when the harness itself failed (an
 unexpected exception while producing a row). Unsupported capabilities are a successful
@@ -39,12 +55,14 @@ from . import outcomes as O
 from .version import PROBE_CONTRACT_VERSION, WORKER_VERSION
 
 # The row contract. The first eight fields are the required contract; the rest are the
-# labelling and provenance fields every worker document carries.
+# labelling, provenance and citation fields every worker document carries. Grace's
+# ``capability`` table stores the same contract (see ``grace/schema.sql``).
 ROW_FIELDS = ("capability", "supported", "permission_state", "observed_version",
               "probe_method", "probe_assertion", "limitation", "evidence")
 ROW_LABELLING_FIELDS = ("state", "origin", "label", "disclaimer", "probed_at",
                         "title", "values_from_source", "adapter_is_real",
-                        "real_source_connected", "probe_contract_version")
+                        "real_source_connected", "probe_contract_version",
+                        "source", "citations", "observed_version_reason")
 
 
 @dataclass(frozen=True)
@@ -55,6 +73,30 @@ class Capability:
     probe_assertion: str
     implemented: bool = True
     limitation: Optional[str] = None
+    #: Which source this capability is about: mail | beeper | contacts | hermes.
+    source: str = "mail"
+    #: Probe-pack refs (O01-O22) a documentation-backed row quotes. Empty for rows this
+    #: worker measures itself.
+    citations: tuple = ()
+    #: Recorded page facts / silences / the Mac procedure, for documented rows.
+    documented: tuple = ()
+    absences: tuple = ()
+    procedure: tuple = ()
+    #: True when this row comes from a documentation read and no adapter exists for it.
+    documented_only: bool = False
+
+
+def documented_capabilities() -> tuple:
+    """Build one :class:`Capability` per capability recorded in the Gate 2 pack."""
+    from .documented_capabilities import DOCUMENTED_CAPABILITIES
+    return tuple(Capability(name=entry["name"], title=entry["title"],
+                            probe_method=entry["probe_method"],
+                            probe_assertion=entry["probe_assertion"],
+                            limitation=entry["limitation"], source=entry["source"],
+                            citations=entry["citations"], documented=entry["documented"],
+                            absences=entry["absences"], procedure=entry["procedure"],
+                            documented_only=True)
+                 for entry in DOCUMENTED_CAPABILITIES)
 
 
 CAPABILITIES: tuple = (
@@ -192,9 +234,19 @@ CAPABILITIES: tuple = (
         limitation="reconciliation is not applicable until a send path exists; a receipt "
                    "must never be marked verified against a real source before then",
     ),
-)
+    # ---------------------------------------------------------------------------
+    # The three sources this worker cannot reach yet. Each row is a documentation read
+    # from the Gate 2 probe pack (see ``documented_capabilities.py``), emitted so that
+    # Beeper, Contacts and Hermes have real capability rows with their citations, their
+    # documented gaps and the Mac procedure that would measure them. Every one of them is
+    # ``supported: false`` and ``state: 'unmeasured'``, and none may ever be supported
+    # from a documentation read.
+    # ---------------------------------------------------------------------------
+) + documented_capabilities()
 
 CAPABILITY_NAMES = tuple(c.name for c in CAPABILITIES)
+#: The capabilities whose evidence is a documentation read only.
+DOCUMENTED_CAPABILITY_NAMES = tuple(c.name for c in CAPABILITIES if c.documented_only)
 
 
 # ---------------------------------------------------------------- probe context --
@@ -325,20 +377,54 @@ class ProbeContext:
 def _row(context: ProbeContext, capability: Capability, *, supported: bool, state: str,
          permission_state: str, limitation: Optional[str], evidence: dict,
          observed_version: Optional[str] = None,
-         values_from_source: Optional[bool] = None) -> dict:
+         observed_version_reason: Optional[str] = None,
+         values_from_source: Optional[bool] = None,
+         origin: Optional[str] = None, adapter_is_real: Optional[bool] = None,
+         citations: Optional[tuple] = None) -> dict:
+    """Build one row, enforcing the rules that keep a row from over-claiming.
+
+    ``observed_version`` is **never** defaulted from another row's read: a caller that
+    observed a version passes it (with what it came from), and every other row reports
+    the literal ``not_observed`` and the reason. ``supported`` is refused outright for a
+    documentation-origin row, because a page is not a measurement.
+    """
+    row_origin = origin or context.origin
+    row_cites = tuple(citations if citations is not None else capability.citations)
+    if observed_version is None:
+        observed_version = O.VERSION_NOT_OBSERVED
+        observed_version_reason = observed_version_reason or (
+            "this row did not observe a version: it did not read the source's version "
+            "information"
+            if state in (O.SUCCESS, O.PARTIAL) else
+            "no version was observed, because this row never reached the source "
+            f"(state {state!r})")
+    if origin == O.DOCUMENTATION or (row_origin == O.DOCUMENTATION):
+        observed_version = O.VERSION_NOT_OBSERVED
+        observed_version_reason = (
+            "documentation read only: no source was contacted by this row, so no version "
+            "could be observed on any host")
+    if not O.probe_row_supported_claim_allowed({
+            "origin": row_origin, "supported": bool(supported),
+            "values_from_source": bool(values_from_source),
+            "real_source_connected": bool(adapter_is_real and values_from_source)}):
+        raise ValueError(
+            f"probe row {capability.name!r}: a documentation-origin row may never be "
+            "supported=true (probe-pack scope statement)")
     row = {
         "capability": capability.name,
         "title": capability.title,
+        "source": capability.source,
         "supported": bool(supported),
         "state": state,
         "permission_state": permission_state,
-        "observed_version": observed_version if observed_version is not None
-                            else context.mail_version(),
+        "observed_version": observed_version,
+        "observed_version_reason": observed_version_reason,
         "probe_method": capability.probe_method,
         "probe_assertion": capability.probe_assertion,
         "limitation": limitation or capability.limitation,
         "evidence": evidence,
-        "origin": context.origin,
+        "citations": list(row_cites),
+        "origin": row_origin,
         "probed_at": O.now(),
         "probe_contract_version": PROBE_CONTRACT_VERSION,
         # ``adapter_is_real``: the real adapter (not a fixture twin) produced this row.
@@ -348,17 +434,22 @@ def _row(context: ProbeContext, capability: Capability, *, supported: bool, stat
         # the product ("a real source was contacted and this value came from it"). On this
         # Linux computer the real adapter answers every row with a typed refusal, so every
         # row is false; only a real probe on a Mac can make it true.
-        "adapter_is_real": bool(context.adapter_is_real),
+        "adapter_is_real": (bool(context.adapter_is_real)
+                            if adapter_is_real is None else bool(adapter_is_real)),
         "values_from_source": (state in (O.SUCCESS, O.PARTIAL)
                                if values_from_source is None
                                else bool(values_from_source)),
-        "real_source_connected": bool(context.adapter_is_real and (
-            state in (O.SUCCESS, O.PARTIAL)
-            if values_from_source is None else bool(values_from_source))),
+        "real_source_connected": bool(
+            (context.adapter_is_real if adapter_is_real is None else adapter_is_real)
+            and (state in (O.SUCCESS, O.PARTIAL)
+                 if values_from_source is None else bool(values_from_source))),
     }
-    if context.origin != O.REAL:
-        row["label"] = context.label or O.fixture_label("mail")
-        row["disclaimer"] = O.FIXTURE_DISCLAIMER
+    if row["origin"] != O.REAL:
+        if row["origin"] == O.DOCUMENTATION:
+            row["label"] = O.documentation_label(capability.source, row_cites)
+        else:
+            row["label"] = context.label or O.fixture_label("mail")
+        row["disclaimer"] = O.disclaimer_for(row["origin"])
     else:
         row["label"] = None
         row["disclaimer"] = None
@@ -414,7 +505,10 @@ def _probe_manifest(context: ProbeContext, capability: Capability) -> dict:
                     "note": "the worker refuses to mark a Mail capability supported before "
                             "it has been measured on this Mac",
                 },
-                observed_version=WORKER_VERSION, values_from_source=False)
+                observed_version=WORKER_VERSION,
+                observed_version_reason=("the worker's own version: this row describes the "
+                                         "worker's manifest, not Mail"),
+                values_from_source=False)
 
 
 def _probe_health(context: ProbeContext, capability: Capability) -> dict:
@@ -441,8 +535,14 @@ def _probe_health(context: ProbeContext, capability: Capability) -> dict:
                           "mail_bundle_found": bool(bundle.get("path")),
                           "mail_running": running,
                           "duration_ms": ident.duration_ms,
+                          "version_observed_from": "Mail.app's installed bundle Info.plist",
                           "probe": (ident.data or {}).get("probe")},
-                observed_version=version)
+                observed_version=version,
+                observed_version_reason=(
+                    "observed from Mail.app's installed bundle Info.plist by this row"
+                    if version else
+                    "Mail.app's bundle version could not be read on this host, so no "
+                    "version was observed"))
 
 
 def _probe_account_enumeration(context: ProbeContext, capability: Capability) -> dict:
@@ -499,23 +599,36 @@ def _probe_bounded_message_listing(context: ProbeContext, capability: Capability
                             {"account": context.account(), "mailbox": context.mailbox()})
     coverage = page.data.get("coverage", {})
     items = page.data.get("items", [])
-    return _row(context, capability,
-                supported=bool(items) or coverage.get("mailbox_total_count") == 0,
-                state=page.code,
+    # This row's assertion is that a bounded page comes back *with the mailbox's true
+    # message count*, so that a capped scan is distinguishable from a complete one. A page
+    # whose total count was never read did not evaluate that assertion, and may not claim
+    # `supported` -- it is `unmeasured`, with the reason.
+    total = coverage.get("mailbox_total_count")
+    assertion_evaluated = total is not None
+    supported = assertion_evaluated and (bool(items) or total == 0)
+    limitation = page.detail if page.code == O.PARTIAL else None
+    if not assertion_evaluated:
+        limitation = ("the mailbox's true message count was not observed, so a capped scan "
+                      "cannot be distinguished from a complete one: this row's assertion "
+                      "was not evaluated (unmeasured, not unsupported)")
+    return _row(context, capability, supported=supported,
+                state=(page.code if assertion_evaluated else O.PROBE_UNMEASURED),
                 permission_state=O.PERMISSION_GRANTED,
-                limitation=(page.detail if page.code == O.PARTIAL else None),
+                limitation=limitation,
                 evidence={"account": context.account(), "mailbox": context.mailbox(),
                           "page_size_requested": context.sample,
                           "observed_count": coverage.get("observed_count"),
-                          "mailbox_total_count": coverage.get("mailbox_total_count"),
+                          "mailbox_total_count": total,
                           "scan_capped": coverage.get("scan_capped"),
                           "coverage_state": coverage.get("coverage_state"),
+                          "assertion_evaluated": assertion_evaluated,
                           "has_next_cursor": bool(page.data.get("next_cursor")),
                           "ordering_sample": page.data.get("ordering_sample"),
                           "first_item_fields_unreadable":
                               sorted(k for k, v in (items[0] if items else {}).items()
                                      if v is None),
-                          "duration_ms": page.duration_ms})
+                          "duration_ms": page.duration_ms},
+                values_from_source=(None if assertion_evaluated else False))
 
 
 def _probe_historical_iteration(context: ProbeContext, capability: Capability) -> dict:
@@ -527,18 +640,26 @@ def _probe_historical_iteration(context: ProbeContext, capability: Capability) -
     if not cursor:
         coverage = page.data.get("coverage", {})
         capped = bool(coverage.get("scan_capped"))
-        return _row(context, capability, supported=True, state=page.code,
+        # One page was walked and no cursor was offered, so *this row's assertion* -- that
+        # a cursor resumes the next page and the pages are disjoint -- was never
+        # evaluated. It cannot be `supported`; the honest state is `unmeasured`.
+        return _row(context, capability, supported=False,
+                    state=O.PROBE_UNMEASURED,
                     permission_state=O.PERMISSION_GRANTED,
-                    limitation=("iteration stops at the bounded scan window; this mailbox "
-                                "is larger than the scan, so deeper history is unproven"
-                                if capped else
-                                "this mailbox fitted inside one bounded page, so only a "
-                                "single page was available to walk"),
-                    evidence={"pages_walked": 1, "first_page_ids": first_ids,
+                    limitation=("only one page was available to walk, so no cursor was "
+                                "offered and resumption was not exercised: the assertion "
+                                "(a cursor resumes the next page and the pages are "
+                                "disjoint) was not evaluated"
+                                + (" — this mailbox is larger than the bounded scan, so "
+                                   "deeper history is unproven" if capped else
+                                   " — this mailbox fitted inside one bounded page")),
+                    evidence={"pages_walked": 1, "assertion_evaluated": False,
+                              "first_page_ids": first_ids,
                               "mailbox_total_count": coverage.get("mailbox_total_count"),
                               "scan_capped": capped,
                               "note": "no cursor was offered because nothing remained "
-                                      "inside the scanned window"})
+                                      "inside the scanned window"},
+                    values_from_source=False)
     second = context.page(cursor=cursor)
     if not second.usable:
         return _blocked_row(context, capability, second,
@@ -546,10 +667,21 @@ def _probe_historical_iteration(context: ProbeContext, capability: Capability) -
     second_ids = [i.get("internal_id") for i in second.data.get("items", [])]
     overlap = sorted(set(first_ids) & set(second_ids))
     resumed = bool(second_ids)
+    if not resumed:
+        # The cursor was offered but returned nothing, so resumption was exercised and
+        # produced no page: the assertion is evaluated and does not hold.
+        return _row(context, capability, supported=False, state=second.code,
+                    permission_state=O.PERMISSION_GRANTED,
+                    limitation=("the cursor was offered but the resumed page carried no "
+                                "messages, so iteration did not resume"),
+                    evidence={"pages_walked": 2, "assertion_evaluated": True,
+                              "first_page_ids": first_ids, "second_page_ids": [],
+                              "cursor_used": cursor})
     return _row(context, capability, supported=resumed and not overlap,
                 state=second.code, permission_state=O.PERMISSION_GRANTED,
                 limitation=(second.detail if second.code == O.PARTIAL else None),
-                evidence={"pages_walked": 2, "first_page_ids": first_ids,
+                evidence={"pages_walked": 2, "assertion_evaluated": True,
+                          "first_page_ids": first_ids,
                           "second_page_ids": second_ids, "overlap_ids": overlap,
                           "cursor_used": cursor,
                           "first_page_duration_ms": page.duration_ms,
@@ -702,20 +834,46 @@ def _probe_attachment_enumeration(context: ProbeContext, capability: Capability)
         return _blocked_row(context, capability, got,
                             {"reference": items[0]["namespaced_id"]})
     data = got.data or {}
-    return _row(context, capability, supported=True, state=got.code,
-                permission_state=O.PERMISSION_GRANTED,
-                limitation=(got.detail if got.code == O.PARTIAL else
-                            ("no attachment was present in the sampled message, so this "
-                             "row proves the call works, not that every message's "
-                             "attachments enumerate")),
+    attachments = data.get("attachments") or []
+    # This row's assertion is that attachment metadata resolves *per item* and that each
+    # attachment's local availability is reported separately. A message with no attachment
+    # exercises neither half, so the row is `unmeasured` rather than supported.
+    comparable = [a for a in attachments
+                  if a.get("filename") and a.get("downloaded") is not None]
+    if not attachments:
+        return _row(context, capability, supported=False, state=O.PROBE_UNMEASURED,
+                    permission_state=O.PERMISSION_GRANTED,
+                    limitation=("the sampled message carried no attachment, so this row's "
+                                "assertion (metadata resolves per item, availability "
+                                "reported separately) was not evaluated: unmeasured, not "
+                                "unsupported"),
+                    evidence={"reference": items[0]["namespaced_id"],
+                              "count": data.get("count"),
+                              "assertion_evaluated": False,
+                              "note": data.get("note")},
+                    values_from_source=False)
+    complete_per_item = bool(comparable) and len(comparable) == len(attachments)
+    if got.code == O.PARTIAL:
+        limitation = got.detail
+    elif complete_per_item:
+        limitation = None
+    else:
+        limitation = ("at least one attachment did not report a filename and a downloaded "
+                      "state, so per-item enumeration is unproven")
+    return _row(context, capability,
+                supported=complete_per_item,
+                state=got.code, permission_state=O.PERMISSION_GRANTED,
+                limitation=limitation,
                 evidence={"reference": items[0]["namespaced_id"],
                           "count": data.get("count"),
                           "not_downloaded_locally": data.get("not_downloaded_locally"),
+                          "assertion_evaluated": True,
+                          "attachments_with_filename_and_availability": len(comparable),
                           "attachments": [{"filename": a.get("filename"),
                                            "mime_type": a.get("mime_type"),
                                            "size_bytes": a.get("size_bytes"),
                                            "downloaded": a.get("downloaded")}
-                                          for a in data.get("attachments", [])[:10]],
+                                          for a in attachments[:10]],
                           "note": data.get("note")})
 
 
@@ -743,6 +901,41 @@ def _probe_deliberately_absent(context: ProbeContext, capability: Capability) ->
                           "next_action": got.next_action})
 
 
+def _probe_documented(context: ProbeContext, capability: Capability) -> dict:
+    """One row per capability the Gate 2 pack documents but this worker cannot measure.
+
+    Nothing is contacted and nothing is claimed: the row is ``origin: documentation``,
+    ``supported: false``, ``state: 'unmeasured'``, and it carries the pack refs it quotes,
+    the page's own facts, the page's silences and the Mac procedure that would settle it.
+    This behaves identically on every host on purpose -- the source has no adapter here or
+    on the Mac yet, so there is nothing a different host could measure differently, and
+    inventing a host-specific answer would be the one thing this row must not do.
+    """
+    from .documented_capabilities import PACK_PATH
+    evidence = {
+        "documentation_only": True,
+        "citations": list(capability.citations),
+        "pack_path": PACK_PATH,
+        "documented_facts": list(capability.documented),
+        "documented_absences": list(capability.absences),
+        "mac_probe_procedure": list(capability.procedure),
+        "why_unmeasured": (
+            "this worker has no " + capability.source + " adapter in this slice, so nothing "
+            "was read and nothing could be measured on any host. The row records the "
+            "documented surface and the procedure that measures it; it never records a "
+            "result. A documentation read can never set supported: true"),
+        "no_source_contacted": True,
+        "observed_version_reason": (
+            "documentation read only: no source was contacted by this row, so no version "
+            "could be observed"),
+    }
+    return _row(context, capability, supported=False, state=O.PROBE_UNMEASURED,
+                permission_state=O.PERMISSION_NOT_DETERMINED,
+                limitation=capability.limitation,
+                evidence=evidence, origin=O.DOCUMENTATION, adapter_is_real=False,
+                values_from_source=False, citations=capability.citations)
+
+
 def _ref_of(context: ProbeContext) -> Optional[str]:
     page = context.page()
     items = (page.data or {}).get("items") or [] if page.usable else []
@@ -767,6 +960,10 @@ _PROBES = {
     "authorized_send": _probe_deliberately_absent,
     "send_reconciliation": _probe_deliberately_absent,
 }
+# Every capability recorded from the Gate 2 probe pack is answered by the documentation
+# probe: it contacts nothing, measures nothing and says so.
+for _documented in DOCUMENTED_CAPABILITY_NAMES:
+    _PROBES[_documented] = _probe_documented
 
 assert set(_PROBES) == set(CAPABILITY_NAMES), "every capability needs a probe"
 
@@ -789,9 +986,20 @@ class ProbeRun:
         permissions = {}
         for row in self.rows:
             permissions[row["permission_state"]] = permissions.get(row["permission_state"], 0) + 1
+        sources = {}
+        documented = []
+        for row in self.rows:
+            sources[row.get("source")] = sources.get(row.get("source"), 0) + 1
+            if row.get("origin") == O.DOCUMENTATION:
+                documented.append(row["capability"])
         return {"capabilities": len(self.rows), "supported": supported,
                 "unsupported": unsupported, "states": states,
                 "permission_states": permissions,
+                "sources": sources,
+                "documentation_rows": documented,
+                "documentation_rows_are_never_supported": not any(
+                    r["supported"] for r in self.rows
+                    if r.get("origin") == O.DOCUMENTATION),
                 "harness_errors": len(self.harness_errors)}
 
 
