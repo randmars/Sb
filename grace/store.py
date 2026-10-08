@@ -36,6 +36,17 @@ DEFAULT_DB = os.environ.get(DEFAULT_DB_ENV) or str(Path(os.path.expanduser(DEFAU
 #: column to an existing database, so an existing ledger is upgraded in place here rather
 #: than silently missing the new state.
 ADDED_COLUMNS: dict[str, dict[str, str]] = {
+    # The probe-row contract (probe-pack 00-TEMPLATE.md). A ledger written before these
+    # columns existed must gain them, or a real Gate 2 measurement would be dropped.
+    "capability": {
+        "observed_version": "TEXT",
+        "permission": "TEXT",
+        "probe_assertion": "TEXT",
+        "evidence": "TEXT",
+        "values_from_source": "INTEGER",
+        "real_source_connected": "INTEGER",
+        "sourced_refs": "TEXT",
+    },
     "workspace_conversation": {
         "archived_at": "TEXT",
         "archive_reason": "TEXT",
@@ -224,8 +235,28 @@ class Store:
         if "origin" in row:
             C.assert_labelled(row["origin"], row.get("mock_label"), f"{table} write")
         elif "mock_label" in row and row["mock_label"] is not None:
-            if not C.is_mock_label(row["mock_label"]):
-                raise AssertionError(f"{table} write: mock_label must start with 'MOCK:'")
+            labelled = (C.is_mock_label(row["mock_label"])
+                        or C.is_fixture_label(row["mock_label"])
+                        or C.is_documentation_label(row["mock_label"]))
+            if not labelled:
+                raise AssertionError(
+                    f"{table} write: mock_label must start with 'MOCK:', 'FIXTURE:' or "
+                    f"'DOCUMENTATION:'")
+        if table == "capability":
+            # The probe pack's scope statement, enforced where the row is written: a
+            # documentation read can never claim a capability, and a permission state must
+            # come from the one closed vocabulary. Enforced here rather than only in the
+            # import path so that no writer -- seed, import or a future adapter -- can put
+            # an over-claiming capability row in the ledger.
+            if not C.probe_row_supported_claim_allowed(row):
+                raise AssertionError(
+                    "capability write: origin 'documentation' may never be stored with "
+                    "supported truthy (Gate 2 probe pack scope statement)")
+            permission = row.get("permission")
+            if permission is not None and permission not in C.PERMISSION_STATES:
+                raise AssertionError(
+                    f"capability write: permission {permission!r} is not one of "
+                    f"{C.PERMISSION_STATES}")
 
     @staticmethod
     def _require_origin(table: str, row: Mapping[str, Any]) -> None:

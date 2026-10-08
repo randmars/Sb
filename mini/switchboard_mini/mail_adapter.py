@@ -173,15 +173,39 @@ class MailReadOnlyAdapter:
         for capability in CAPABILITIES:
             row = measured.get(capability.name)
             if row is None:
+                # A documented capability cannot be measured by this worker at all: saying
+                # "run `switchboard-mini probe`" would imply it can be. It is unmeasured,
+                # with the pack refs it came from.
+                if capability.documented_only:
+                    capabilities[capability.name] = {
+                        "supported": False,
+                        "state": "unmeasured",
+                        "permission_state": O.PERMISSION_NOT_DETERMINED,
+                        "observed_version": O.VERSION_NOT_OBSERVED,
+                        "limitation": ("documentation only (" + ", ".join(capability.citations)
+                                       + "): this worker has no " + capability.source +
+                                       " adapter, so it cannot measure this capability on "
+                                       "any host yet"),
+                        "probe_method": capability.probe_method,
+                        "probe_assertion": capability.probe_assertion,
+                        "source": capability.source,
+                        "citations": list(capability.citations),
+                        "origin": O.DOCUMENTATION,
+                        "label": O.documentation_label(capability.source,
+                                                       capability.citations),
+                    }
+                    continue
                 capabilities[capability.name] = {
                     "supported": False,
                     "state": "unverified",
                     "permission_state": O.PERMISSION_NOT_DETERMINED,
-                    "observed_version": None,
+                    "observed_version": O.VERSION_NOT_OBSERVED,
                     "limitation": ("not yet probed on this host — run `switchboard-mini "
                                    "probe` and record its output (Gate 2)"),
                     "probe_method": capability.probe_method,
                     "probe_assertion": capability.probe_assertion,
+                    "source": capability.source,
+                    "citations": list(capability.citations),
                 }
             else:
                 capabilities[capability.name] = {
@@ -192,6 +216,9 @@ class MailReadOnlyAdapter:
                     "limitation": row["limitation"],
                     "probe_method": row["probe_method"],
                     "probe_assertion": row["probe_assertion"],
+                    "source": row.get("source", capability.source),
+                    "citations": list(row.get("citations", ())),
+                    "origin": row.get("origin"),
                 }
         manifest = {
             "adapter": self.name,

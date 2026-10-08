@@ -14,7 +14,7 @@ import unittest
 
 from switchboard_mini import outcomes as O
 from switchboard_mini.mail_adapter import build_adapter
-from switchboard_mini.probe import (CAPABILITY_NAMES, CAPABILITIES, ROW_FIELDS,
+from switchboard_mini.probe import DOCUMENTED_CAPABILITY_NAMES, (CAPABILITY_NAMES, CAPABILITIES, ROW_FIELDS,
                                     ROW_LABELLING_FIELDS, run_probe)
 
 PERMISSION_STATES = set(O.PERMISSION_STATES)
@@ -70,6 +70,12 @@ class TestProbeRowShape(unittest.TestCase):
         self.assertEqual([n for n, c in manifest["capabilities"].items() if c["supported"]],
                          [])
         for entry in manifest["capabilities"].values():
+            if entry.get("origin") == O.DOCUMENTATION:
+                # A documented capability cannot be measured by this worker at all: it is
+                # unmeasured, and saying "run the probe" would imply otherwise.
+                self.assertEqual(entry["state"], "unmeasured")
+                self.assertTrue(entry["citations"], entry["name"])
+                continue
             self.assertEqual(entry["state"], "unverified")
             self.assertIn("probe", entry["limitation"])
 
@@ -222,8 +228,9 @@ class TestProbeHarnessFailure(unittest.TestCase):
 
         run = run_probe(Exploding())
         self.assertFalse(run.ok)
-        self.assertEqual(len(run.harness_errors), len(CAPABILITY_NAMES))
-        for row in run.rows:
+        self.assertEqual(len(run.harness_errors),
+                         len(CAPABILITY_NAMES) - len(DOCUMENTED_CAPABILITY_NAMES))
+        for row in [r for r in run.rows if r["origin"] != O.DOCUMENTATION]:
             self.assertEqual(row["state"], "harness_error")
             self.assertFalse(row["supported"])
             self.assertFalse(row["values_from_source"])
@@ -254,7 +261,7 @@ class TestProvenanceHonesty(unittest.TestCase):
         adapter = build_adapter(fixture_mode=False)
         run = run_probe(adapter)
         self.assertTrue(run.ok, run.harness_errors)
-        for row in run.rows:
+        for row in [r for r in run.rows if r["origin"] != O.DOCUMENTATION]:
             self.assertTrue(row["adapter_is_real"], row["capability"])
             self.assertFalse(row["real_source_connected"], row["capability"])
             self.assertFalse(row["values_from_source"], row["capability"])

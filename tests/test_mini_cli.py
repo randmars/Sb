@@ -43,7 +43,7 @@ FIXTURE_REF = make_ref(FIXTURE_ACCOUNT, FIXTURE_MAILBOX, "101")
 #: Commands whose document is an adapter outcome (``Outcome.to_dict()``).
 OUTCOME_COMMANDS = ("health", "accounts", "mailboxes", "list", "fetch")
 
-ROW_STATES = tuple(O.ADAPTER_OUTCOMES) + ("harness_error",)
+ROW_STATES = (tuple(O.ADAPTER_OUTCOMES) + ("harness_error", O.PROBE_UNMEASURED))
 RUN_EVENTS = ("worker_start", "poll", "worker_stop", "startup_failed", "backing_off",
               "harness_failure")
 #: Capabilities this slice deliberately does not build: they refuse by design, not
@@ -347,7 +347,12 @@ class TestFlagPositions(unittest.TestCase):
         rows_after = json_documents(after, "probe --fixture-mode")
         self.assertEqual([r["capability"] for r in rows_before],
                          [r["capability"] for r in rows_after])
-        self.assertEqual([r["origin"] for r in rows_after], [O.FIXTURE] * len(rows_after))
+        # The Beeper/Contacts/Hermes rows are documentation reads (never fixtures) and are
+        # asserted separately; every row this machine actually produced is a labelled fixture.
+        fixture_origins = [r["origin"] for r in rows_after if r["origin"] != O.DOCUMENTATION]
+        self.assertEqual(fixture_origins, [O.FIXTURE] * len(fixture_origins))
+        self.assertTrue(all(r["origin"] == O.DOCUMENTATION for r in rows_after
+                            if r["source"] != "mail"))
         self.assertEqual([r["state"] for r in rows_before],
                          [r["state"] for r in rows_after])
 

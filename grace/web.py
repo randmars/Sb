@@ -42,7 +42,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from . import contracts as C
 from .contracts import ApprovalState, EffectState, JobState, QueueState
 from .effects import InjectedFault
-from .ingest import Ingest
+from .ingest import Ingest, probe_provenance, stored_probe_rows
 from .ledger import Ledger, _job_brief
 from .service import MOCK_WORKER_NOTE, Grace
 
@@ -255,6 +255,32 @@ def _json_list(value: Any) -> list:
 
 # ------------------------------------------------------------------ web server --
 
+
+
+def capability_honesty(svc) -> dict:
+    """What this deployment can honestly say about its source capabilities.
+
+    Every word comes from the stored probe rows (Gate 2): the statement, whether a real
+    source has ever answered, how many rows are unmeasured, and how many are documentation
+    reads. Nothing here is a constant, so it cannot keep asserting "no source was contacted"
+    after a row has recorded one.
+    """
+    provenance = probe_provenance(stored_probe_rows(svc.store))
+    if provenance["no_source_contacted"]:
+        explanation = ("This deployment has no measured Mail, Beeper, Contacts or Hermes "
+                       "connection: " + provenance["statement"] + " Those integrations are "
+                       "Gate 2/3 work on Randy's Mac and have not been exercised here.")
+    else:
+        explanation = provenance["statement"]
+    return {
+        "real_sources_connected": bool(provenance["real_source_connected"]),
+        "explanation": explanation,
+        "rows": provenance["rows"],
+        "unmeasured_rows": provenance["unmeasured"],
+        "documentation_rows": provenance["documentation_rows"],
+        "supported_rows": provenance["supported"],
+        "statement": provenance["statement"],
+    }
 
 class WebServer:
     """Wraps the Grace service in an authenticated HTTP surface.
@@ -618,14 +644,24 @@ class _AppMixin:
         svc = self.svc
         assert svc is not None
         status = svc.health()
+        # The "no source was contacted" claim is derived from the stored capability rows, not
+        # hardcoded: the moment a row records ``real_source_connected`` this text changes,
+        # so it can never keep saying "nothing was contacted" over a real measurement.
+        provenance = probe_provenance(stored_probe_rows(svc.store))
+        note = ("Every value in this client came from the labelled mock adapters in this "
+                "repository, or from the application's own ledger. ")
+        if provenance["no_source_contacted"]:
+            note += ("No Mail, Beeper, Contacts or Hermes source was contacted: "
+                     f"{provenance['statement']}")
+        else:
+            note += provenance["statement"]
         return {
             "mocked": bool(status["mocked"]),
             "mock_label": status["mock_label"] or C.mock_label("web"),
             "mock_disclaimer": C.MOCK_DISCLAIMER,
-            "verified_against_real_source": False,
-            "labelling_note": ("Every value in this client came from the labelled mock adapters in "
-                               "this repository, or from the application's own ledger. No Mail, "
-                               "Beeper, Contacts or Hermes source was contacted."),
+            "verified_against_real_source": bool(provenance["real_source_connected"]),
+            "capability_provenance": provenance,
+            "labelling_note": note,
         }
 
     def _wrapped(self, payload: dict) -> dict:
@@ -660,12 +696,7 @@ class _AppMixin:
             "coverage": svc.ingest.coverage(),
             "disconnected_states": states,
             "degraded": bool(states),
-            "capability_honesty": {
-                "real_sources_connected": False,
-                "explanation": ("This deployment has no Mail, Beeper, Contacts or Hermes connection. "
-                                "Those integrations are Gate 2/3 work on Randy's Mac and have not "
-                                "been exercised here."),
-            },
+            "capability_honesty": capability_honesty(svc),
             "worker": {
                 "kind": "mock",
                 "note": MOCK_WORKER_NOTE,
@@ -686,8 +717,11 @@ class _AppMixin:
           source is offline, and neither fact may hide the other (PRD §6, §13, R09, T20).
         """
         out: list[dict] = []
-        healthy = {"connected", "syncing", "current"}
-        permission_ok = ("granted", "not_required")
+        # One definition of a healthy source, imported rather than restated: this list used
+        # to disagree with the ingest layer's, so a source that layer read as healthy could
+        # be shown to the owner here as disconnected.
+        healthy = set(Ingest.HEALTHY_SOURCE_STATES)
+        permission_ok = C.PERMISSION_OK_STATES
         for account in sources:
             observed = account.get("health_state")
             stored = account.get("stored_health_state")
@@ -725,7 +759,13 @@ class _AppMixin:
             if not conditions:
                 continue
             for capability in account.get("capabilities", []):
-                if capability.get("state") in ("ok",):
+                if capability.get("supported") and capability.get("state") in healthy:
+                    # A capability the source declares supported and this run observed healthy
+                    # is not a condition the owner must act on. The old guard compared against
+                    # the bare literal "ok" -- a value no probe row ever emits (probe rows use
+                    # the adapter outcome codes) -- so it skipped the seeded rows by accident
+                    # and would have reported every real probe row. It now uses the same
+                    # healthy-vocabulary as the source check above.
                     continue
                 out.append({
                     "kind": "capability",
@@ -737,8 +777,15 @@ class _AppMixin:
                     "reason": capability.get("limitation") or f"capability is {capability.get('state')}",
                     "next_action": next_action_for(capability.get("state")),
                     "probe_method": capability.get("probe_method"),
-                    "origin": account.get("origin"),
-                    "mock_label": account.get("mock_label"),
+                    "probe_assertion": capability.get("probe_assertion"),
+                    "observed_version": capability.get("observed_version"),
+                    "permission": capability.get("permission"),
+                    "supported": capability.get("supported"),
+                    "values_from_source": capability.get("values_from_source"),
+                    "real_source_connected": capability.get("real_source_connected"),
+                    "sourced_refs": capability.get("sourced_refs"),
+                    "origin": capability.get("origin") or account.get("origin"),
+                    "mock_label": capability.get("label") or account.get("mock_label"),
                 })
         return out
 

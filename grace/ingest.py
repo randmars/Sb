@@ -444,10 +444,25 @@ class Ingest:
     #: A source counts as healthy only when its own adapter says so in these terms. Any
     #: other typed outcome (offline, permission_denied, unsupported, ...) is a condition
     #: the owner must be able to see.
-    HEALTHY_OBSERVED_STATES = ("success", "ok", "current", "connected", "syncing")
+    #:
+    #: There is ONE definition of "healthy/current" for a source, and it is the next two
+    #: constants. The web layer used to keep its own narrower copy
+    #: (``{"connected", "syncing", "current"}``) while this module used a wider one that
+    #: also admitted the raw probe codes ``success``/``ok``; a source the ingest layer read
+    #: as healthy could then be reported to the owner as disconnected. The web layer now
+    #: imports ``HEALTHY_SOURCE_STATES`` from here instead of restating it.
+    HEALTHY_SOURCE_STATES = ("connected", "syncing", "current")
+    #: The same fact expressed as raw adapter outcome codes (what ``observe_sources``
+    #: returns and what an adapter's ``health()`` can answer).
+    HEALTHY_OBSERVED_STATES = ("success", "ok") + HEALTHY_SOURCE_STATES
 
     #: Coverage states that mean "this ledger view is as complete as the source allowed".
-    COMPLETE_COVERAGE_STATES = ("current", "fixture", "fixture_scan", "verified_scan")
+    #: ``complete`` is the state ``_coverage_axis`` itself produces for a fully scanned
+    #: scope and the one ``AXIS_HEALTHY["coverage"]`` treats as green; leaving it out made a
+    #: complete coverage declaration score as ``partial_history`` (the mis-scoring this
+    #: list was fixed for), because the guard is "not in COMPLETE_COVERAGE_STATES".
+    COMPLETE_COVERAGE_STATES = ("complete", "current", "fixture", "fixture_scan",
+                                "verified_scan")
 
     # ---------------------------------------------------------------------------
     # Source health is three separate axes, not one blended value. Transport asks "can
@@ -720,9 +735,9 @@ class Ingest:
         rows = self.store.all("SELECT * FROM source_account ORDER BY adapter, account_id")
         observed = self.observe_sources()
         for row in rows:
-            row["capabilities"] = self.store.all(
-                "SELECT name, supported, state, limitation, probe_method FROM capability "
-                "WHERE account_id = ? ORDER BY name", (row["account_id"],))
+            row["capabilities"] = [_capability_row(c) for c in self.store.all(
+                "SELECT * FROM capability WHERE account_id = ? ORDER BY name",
+                (row["account_id"],))]
             row["enabled_operations"] = json.loads(row["enabled_operations"])
             row["mock"] = row["origin"] == C.MOCK
             row["disclosure"] = ("MOCK: this is a labelled mock account. It proves nothing about "
@@ -752,3 +767,176 @@ class Ingest:
                 row["health_state_basis"] = (
                     "stored ledger state; the source answered healthy to this run's probe")
         return rows
+
+# ------------------------------------------------------- Gate 2 probe records --
+# The Mini worker's capability probe is the instrument that will measure Randy's Mac
+# (Gate 2). Its rows are the contract in `probe-pack/00-TEMPLATE.md`; they are imported
+# here so a real measurement lands in the ledger and can be served to the review client
+# instead of dying in a report.
+
+#: Contract version the Mini worker writes into every row. An import from a different
+#: version is refused rather than silently reinterpreted.
+PROBE_CONTRACT_VERSION = "1.0"   # = switchboard_mini.version.PROBE_CONTRACT_VERSION
+
+
+def _capability_row(stored: dict) -> dict:
+    """One capability row as the review surfaces need it, from the stored columns."""
+    return {
+        "name": stored["name"],
+        "supported": bool(stored["supported"]),
+        "state": stored["state"],
+        "limitation": stored.get("limitation"),
+        "probe_method": stored.get("probe_method"),
+        "probe_assertion": stored.get("probe_assertion"),
+        "observed_version": stored.get("observed_version"),
+        "permission": stored.get("permission"),
+        "observed_at": stored.get("observed_at"),
+        "origin": stored.get("origin"),
+        "label": stored.get("mock_label"),
+        "source": stored.get("source") or stored.get("adapter"),
+        # The three honesty flags, read straight back out of the ledger. ``real_source_connected``
+        # is the one that decides whether "no source was contacted" may be said at all.
+        "values_from_source": bool(stored.get("values_from_source")),
+        "real_source_connected": bool(stored.get("real_source_connected")),
+        "sourced_refs": json.loads(stored["sourced_refs"]) if stored.get("sourced_refs")
+                        else [],
+    }
+
+
+def probe_row_problems(row: dict) -> list[str]:
+    """Every reason this probe row may not be stored. Empty list means it may.
+
+    ``probe-pack/00-TEMPLATE.md`` fixes the row contract; this is where Grace holds it.
+    The two rules that matter most, both from the pack's scope statement:
+    a documentation-origin row may never be ``supported``, and a row may not claim it
+    answered from a source unless it says a real source was connected.
+    """
+    problems: list[str] = []
+    name = row.get("capability") or row.get("name")
+    if not name:
+        problems.append("row has no capability name")
+    origin = row.get("origin")
+    if origin not in ("real", "fixture", "mock", "documentation"):
+        problems.append(f"{name}: origin {origin!r} is not real|fixture|documentation")
+    if "supported" not in row:
+        problems.append(f"{name}: row does not say whether the capability is supported")
+    state = row.get("state")
+    if state not in C.PROBE_ROW_STATES:
+        problems.append(f"{name}: state {state!r} is not one of {C.PROBE_ROW_STATES}")
+    permission = row.get("permission_state", row.get("permission"))
+    if permission not in C.PERMISSION_STATES:
+        problems.append(f"{name}: permission {permission!r} is not one of "
+                        f"{C.PERMISSION_STATES}")
+    if not row.get("probe_assertion"):
+        problems.append(f"{name}: row does not state what its supported flag asserts")
+    version = row.get("observed_version")
+    if not version:
+        problems.append(f"{name}: row reports no observed_version (use "
+                        f"{C.VERSION_NOT_OBSERVED!r} when nothing was observed)")
+    contract = row.get("probe_contract_version")
+    if contract and contract != PROBE_CONTRACT_VERSION:
+        problems.append(f"{name}: row was written by probe contract {contract!r}, this "
+                        f"service stores {PROBE_CONTRACT_VERSION!r}")
+    # The scope-statement rule, and the flag consistency it depends on.
+    if not C.probe_row_supported_claim_allowed(row):
+        problems.append(f"{name}: origin 'documentation' may never be supported=true "
+                        f"(probe-pack scope statement)")
+    if row.get("supported") and origin == "real" and not row.get("real_source_connected"):
+        problems.append(f"{name}: origin 'real' claims the capability is supported but "
+                        f"real_source_connected=false — no source answered this row")
+    if row.get("values_from_source") and row.get("state") not in ("success", "partial"):
+        problems.append(f"{name}: values_from_source=true with state {state!r} — the row "
+                        f"has no source values to have come from")
+    if row.get("real_source_connected") and not row.get("values_from_source"):
+        problems.append(f"{name}: real_source_connected=true while values_from_source=false")
+    return problems
+
+
+def probe_provenance(rows: list[dict]) -> dict:
+    """What a set of probe rows honestly says about where its values came from.
+
+    Every word of the statement is derived from the rows themselves, so it cannot go on
+    saying "no source was contacted" after a row has connected to one. This is the single
+    source of that claim for the review client and the health payload.
+    """
+    total = len(rows)
+    if not total:
+        return {"rows": 0, "real_source_connected": 0, "documentation_rows": 0,
+                "fixture_rows": 0, "supported": 0, "unmeasured": 0,
+                "no_source_contacted": True,
+                "statement": ("No capability rows have been measured: no source has been "
+                              "contacted, and no capability is claimed.")}
+    connected = [r for r in rows if r.get("real_source_connected")]
+    documentation = [r for r in rows if r.get("origin") == "documentation"]
+    fixture = [r for r in rows if r.get("origin") in ("fixture", "mock")]
+    supported = [r for r in rows if r.get("supported")]
+    unmeasured = [r for r in rows if r.get("state") == C.PROBE_UNMEASURED]
+    if connected:
+        statement = (f"{len(connected)} of {total} capability rows answered from a real "
+                     f"source; the rest did not.")
+    else:
+        statement = (f"No source was contacted by any of the {total} capability rows: "
+                     f"{len(unmeasured)} are unmeasured"
+                     + (f", {len(documentation)} are documented-only reads"
+                        if documentation else "")
+                     + (f", {len(fixture)} came from recorded fixtures" if fixture else "")
+                     + ". Nothing here is an observation of Randy's Mac.")
+    return {"rows": total, "real_source_connected": len(connected),
+            "documentation_rows": len(documentation), "fixture_rows": len(fixture),
+            "supported": len(supported), "unmeasured": len(unmeasured),
+            "no_source_contacted": not connected, "statement": statement,
+            "sources": sorted({r.get("source") for r in rows if r.get("source")})}
+
+
+def import_probe_rows(store: Store, account_id: str, rows: Iterable[dict], *,
+                      actor: str = "probe-import") -> dict:
+    """Store one probe run's rows. Refuses the whole import if any row over-claims.
+
+    All-or-nothing on purpose: a partially imported probe would leave the review surfaces
+    describing a machine that was never measured. Returns a result dict; raises nothing for
+    bad input (an import of a malformed document is a typed refusal, not a crash).
+    """
+    rows = list(rows)
+    problems = [p for row in rows for p in probe_row_problems(row)]
+    provenance = probe_provenance([
+        {"origin": row.get("origin"), "supported": row.get("supported"),
+         "state": row.get("state"), "real_source_connected": row.get("real_source_connected"),
+         "source": row.get("source")} for row in rows])
+    if problems:
+        return {"imported": 0, "refused": len(rows), "problems": sorted(problems),
+                "provenance": provenance, "ok": False}
+    if not store.one("SELECT account_id FROM source_account WHERE account_id = ?",
+                     (account_id,)):
+        return {"imported": 0, "refused": len(rows),
+                "problems": [f"no source_account {account_id!r} in this ledger"],
+                "provenance": provenance, "ok": False}
+    with store.tx():
+        for row in rows:
+            name = row.get("capability") or row.get("name")
+            store.upsert_row("capability", {
+                "account_id": account_id,
+                "name": name,
+                "supported": 1 if row.get("supported") else 0,
+                "state": row.get("state"),
+                "limitation": row.get("limitation"),
+                "probe_method": row.get("probe_method"),
+                "observed_at": row.get("probed_at") or C.now(),
+                "origin": row.get("origin"),
+                "mock_label": row.get("label") or row.get("mock_label"),
+                "observed_version": row.get("observed_version"),
+                "permission": row.get("permission_state", row.get("permission")),
+                "probe_assertion": row.get("probe_assertion"),
+                "evidence": C.canonical_json(row.get("evidence") or {}),
+                "values_from_source": 1 if row.get("values_from_source") else 0,
+                "real_source_connected": 1 if row.get("real_source_connected") else 0,
+                "sourced_refs": C.canonical_json(list(row.get("citations") or [])),
+            }, ["account_id", "name"])
+    return {"imported": len(rows), "refused": 0, "problems": [], "provenance": provenance,
+            "ok": True}
+
+def stored_probe_rows(store: Store) -> list[dict]:
+    """Every capability row in the ledger, shaped for :func:`probe_provenance`."""
+    return [_capability_row(row) for row in store.all(
+        "SELECT c.*, a.adapter AS source FROM capability c "
+        "JOIN source_account a ON a.account_id = c.account_id "
+        "ORDER BY c.account_id, c.name")]
