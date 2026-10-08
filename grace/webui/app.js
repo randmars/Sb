@@ -202,7 +202,8 @@ function parseHash() {
   const q = query.get('q') || '';
   const stateFilter = query.get('state') || 'all';
   if (parts[0] === 'c' && parts[1]) {
-    return { name: 'conversation', arg: decodeURIComponent(parts[1]), query: q, from: from, stateFilter: stateFilter };
+    return { name: 'conversation', arg: decodeURIComponent(parts[1]), query: q, from: from,
+             job: query.get('job') || null, stateFilter: stateFilter };
   }
   if (parts[0] === 'working') return { name: 'working', arg: null, query: q, stateFilter: stateFilter };
   if (parts[0] === 'all') return { name: 'all', arg: null, query: q, stateFilter: stateFilter };
@@ -280,24 +281,63 @@ function itemCard(item, opts) {
     ? `<p class="item-meta">Outbound: ${sendStatePill(item.send_state)}</p>` : '';
   const envelope = options.showEnvelope !== false && item.mock_label
     ? `<p class="item-meta">${mockLine(item.mock_label)}</p>` : '';
+  // The review page is per work item: two jobs in one conversation each open their own.
+  const href = '#/c/' + encodeURIComponent(item.ws_conv_id)
+    + (item.job_id ? '?job=' + encodeURIComponent(item.job_id) : '?')
+    + (item.job_id ? '&' : '') + 'from=' + escapeHtml(options.fromTab || '');
   return `
     <article class="item">
-      <a class="item-title" href="#/c/${encodeURIComponent(item.ws_conv_id)}?from=${escapeHtml(options.fromTab || '')}">
+      <a class="item-title" href="${href}">
         ${escapeHtml(item.title)}
       </a>
       <p class="item-meta">
         ${statePill(item.queue_state)}
         ${item.review_state !== 'none' ? pill(item.review_state, 'state-warn') : ''}
         ${item.assignment_state === 'assigned' ? pill('assigned', 'state-working') : ''}
+        ${archivePill(item)}
         <span>age ${escapeHtml(item.age || 'unknown')}</span>
       </p>
       ${reason}
       ${job}
+      ${item.job_id ? `<p class="item-meta tiny">work item ${escapeHtml(item.work_item_id)}</p>` : ''}
       <p class="item-meta">Sending account: ${accounts || '(none recorded)'}</p>
       <p class="item-meta">Audience: ${audience || '(none recorded)'}</p>
       ${send}
       ${envelope}
+      ${retentionLine(item)}
+      <p class="item-actions">
+        ${item.archive_state === 'archived'
+          ? `<button class="quiet" data-unarchive
+               data-kind="${item.job_id ? 'jobs' : 'conversations'}"
+               data-id="${escapeHtml(item.job_id || item.ws_conv_id)}">Unarchive (keep it retrievable)</button>`
+          : `<button class="quiet" data-archive
+               data-kind="${item.job_id ? 'jobs' : 'conversations'}"
+               data-id="${escapeHtml(item.job_id || item.ws_conv_id)}">Archive (not delete)</button>`}
+      </p>
     </article>`;
+}
+
+/* ------------------------------------------------------- archive state ----- */
+
+/* Archived is a state, not a delete: an archived item is out of the default triage
+   surfaces, still stored and still retrievable, and it is never rendered as a deleted
+   one (PRD §8, §12; R08). */
+function archivePill(item) {
+  if (item.archive_state === 'archived') return pill('archived', 'state-archived');
+  if (item.deletion_state === 'deleted') return pill('deleted (tombstone)', 'state-deleted');
+  return '';
+}
+
+function retentionLine(item) {
+  if (item.deletion_state === 'deleted') {
+    return `<p class="item-meta tiny">Deleted: an application tombstone. Still in storage and
+      retrievable; no source row was removed.</p>`;
+  }
+  if (item.archive_state === 'archived') {
+    return `<p class="item-meta tiny">Archived: out of triage, still stored and retrievable.
+      Archive is not deletion.</p>`;
+  }
+  return '';
 }
 
 function emptyState(payload, view) {
@@ -323,15 +363,81 @@ function emptyState(payload, view) {
   return html + '</div>';
 }
 
+/* ------------------------------------------------------- source health ----- */
+
+/* Three separate axes, never one blended value (PRD §6 "Health presentation", R09).
+   Only an explicitly healthy state is ever painted green; an axis whose value is
+   unknown reads 'unknown' and keeps its own reason. */
+const AXIS_ORDER = ['transport', 'freshness', 'coverage'];
+const AXIS_LABELS = {
+  transport: 'Transport — can this source be reached at all?',
+  freshness: 'Freshness — when was it last observed?',
+  coverage: 'Coverage — is the history complete, and if not, why not?',
+};
+const AXIS_HEALTHY = {
+  transport: ['connected'],
+  freshness: ['observed_now'],
+  coverage: ['complete'],
+};
+
+function axisSeverity(axis, name) {
+  if (!axis) return 'severity-unknown';
+  if (axis.severity) return 'severity-' + axis.severity;
+  if (axis.state === 'unknown') return 'severity-unknown';
+  return (AXIS_HEALTHY[name] || []).indexOf(axis.state) >= 0 ? 'severity-ok' : 'severity-warn';
+}
+
+function axisRow(name, axis) {
+  if (!axis) {
+    return `<div class="axis severity-unknown">
+      <h4>${escapeHtml(AXIS_LABELS[name] || name)}</h4>
+      <p><span class="pill state-unknown">unknown</span> This deployment did not report this
+      axis, so it is unknown — never treated as healthy.</p></div>`;
+  }
+  const cls = axisSeverity(axis, name);
+  const green = (AXIS_HEALTHY[name] || []).indexOf(axis.state) >= 0;
+  return `<div class="axis ${cls}">
+    <h4>${escapeHtml(AXIS_LABELS[name] || name)}</h4>
+    <p><span class="pill state-${escapeHtml(axis.severity || (green ? 'ok' : 'unknown'))}">${escapeHtml(axis.state)}</span>
+    ${green ? '' : '<em>not confirmed healthy</em>'}</p>
+    <p>${escapeHtml(axis.reason || '')}</p>
+    <p class="tiny">Basis: ${escapeHtml(axis.basis || 'unknown')}</p>
+    ${axis.gap_reason && axis.gap_reason !== axis.reason
+      ? `<p class="tiny">Gap: ${escapeHtml(axis.gap_reason)}</p>` : ''}
+  </div>`;
+}
+
+function healthAxesBlock(source) {
+  const axes = source.health_axes || {};
+  return `<div class="axes">${AXIS_ORDER.map((n) => axisRow(n, axes[n])).join('')}</div>`;
+}
+
 function sourceHealthBlock(payload) {
   const states = payload.data.disconnected_states || [];
   const sources = payload.data.sources || [];
-  if (!states.length) {
-    return `<div class="callout ok">All ${sources.length} source accounts report a healthy, current
-      state in this deployment. That says nothing about Mail, Beeper, Contacts or Hermes on
-      Randy's Mac — those have never been contacted.</div>`;
-  }
-  return states.map((s) => `
+  const totals = {};
+  AXIS_ORDER.forEach((name) => {
+    totals[name] = sources.filter((s) => {
+      const axis = (s.health_axes || {})[name];
+      return axis && (AXIS_HEALTHY[name] || []).indexOf(axis.state) >= 0;
+    }).length;
+  });
+  const unknownAxes = sources.reduce((sum, s) => sum + AXIS_ORDER.filter((n) => {
+    const axis = (s.health_axes || {})[n];
+    return !axis || axis.state === 'unknown';
+  }).length, 0);
+  const headline = sources.length
+    ? `${totals.transport} of ${sources.length} accounts have a confirmed transport · `
+      + `${totals.freshness} confirmed fresh · ${totals.coverage} with confirmed-complete coverage. `
+      + `${unknownAxes} axis value(s) are unknown and are shown as unknown, not as healthy.`
+    : 'No source accounts are registered in this deployment.';
+  const mock = (payload.data.sources || []).some((s) => s.mock_label)
+    ? ' All of them are MOCK sources: this proves nothing about Mail, Beeper, Contacts or Hermes ' +
+      "on Randy's Mac, which have never been contacted."
+    : '';
+  const healthyClass = (states.length || unknownAxes) ? 'warn' : 'ok';
+  return `<div class="callout ${healthyClass}">${escapeHtml(headline + mock)}</div>`
+    + states.map((s) => `
     <article class="empty state-${escapeHtml(s.state)}">
       <p><strong>${escapeHtml(s.state)}</strong> — ${escapeHtml(s.display_name || s.adapter)}
       ${s.capability ? `<span class="pill">${escapeHtml(s.capability)}</span>` : ''}
@@ -432,16 +538,18 @@ async function renderRulesHealth(payload) {
     return `
       <article class="card">
         <h3>${escapeHtml(s.display_name)} ${mockLine(s.mock_label)}</h3>
+        ${healthAxesBlock(s)}
         ${kv([
       ['adapter', escapeHtml(s.adapter) + ' ' + escapeHtml(s.adapter_version)],
       ['account', escapeHtml(s.account_identity)],
       ['host role', escapeHtml(s.host_role)],
-      ['health', escapeHtml(s.health_state) + (s.health_detail ? ' — ' + escapeHtml(s.health_detail) : '')],
+      ['ledger state (last written)', escapeHtml(s.health_state) + (s.health_detail ? ' — ' + escapeHtml(s.health_detail) : '')],
+      ['ledger state basis', escapeHtml(s.health_state_basis || 'unknown')],
       ['permission', escapeHtml(s.permission_state)],
       ['last success', escapeHtml(s.last_success_at || 'never')],
       ['last probe', escapeHtml(s.last_probe_at || 'never')],
-      ['freshness', escapeHtml(s.freshness || 'unknown')],
     ])}
+        <p class="tiny">${escapeHtml((d.health_axes && d.health_axes.note) || '')}</p>
         <p class="tiny">${escapeHtml(s.disclosure || '')}</p>
         <h4>Capabilities</h4>
         <table>
@@ -1003,7 +1111,10 @@ async function render() {
       const payload = await apiRead('/api/rules-source-health');
       html = await renderRulesHealth(payload);
     } else if (state.route.name === 'conversation') {
-      const payload = await apiRead('/api/conversation/' + encodeURIComponent(state.route.arg));
+      // A conversation can host several jobs; ?job=<job_id> opens that work item's own
+      // review page, so two jobs no longer share one page and one draft (PRD §5, T04/T05).
+      const scope = state.route.job ? '?job=' + encodeURIComponent(state.route.job) : '';
+      const payload = await apiRead('/api/conversation/' + encodeURIComponent(state.route.arg) + scope);
       html = await renderConversation(payload, state.route.arg);
     } else {
       const payload = await apiRead('/api/needs-me');
@@ -1203,6 +1314,18 @@ function wire(root) {
       fail_with: 'retryable_error',
     }));
   }
+
+  root.querySelectorAll('[data-archive], [data-unarchive]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const kind = button.getAttribute('data-kind');
+      const id = button.getAttribute('data-id');
+      const action = button.hasAttribute('data-archive') ? 'archive' : 'unarchive';
+      mutate(`/api/${kind}/${encodeURIComponent(id)}/${action}`,
+        { reason: 'archived from the review client' }, {
+          onDone: () => render(),
+        });
+    });
+  });
 
   root.querySelectorAll('[data-cancel]').forEach((button) => {
     button.addEventListener('click', () => {

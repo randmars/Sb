@@ -253,8 +253,14 @@ class Grace:
     def working(self, limit: int = 50) -> list[dict]:
         return self.ledger.working(limit)
 
-    def all_conversations(self, limit: int = 100) -> list[dict]:
-        return self.ledger.all_conversations(limit)
+    def all_conversations(self, limit: int = 100, *, include_deleted: bool = False) -> list[dict]:
+        """Every workspace conversation, archived ones included.
+
+        ``include_deleted=True`` adds the application tombstones — a deleted item is out of
+        every default list but stays in storage and stays retrievable by identity (PRD §8,
+        R08). Deletion here never removes a source row.
+        """
+        return self.ledger.all_conversations(limit, include_deleted=include_deleted)
 
     def health(self) -> dict:
         mocked = any(a.simulated for a in self.adapters.values())

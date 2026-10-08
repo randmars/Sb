@@ -21,9 +21,38 @@ from typing import Any, Iterable, Iterator, Mapping, Optional, Sequence
 
 from . import contracts as C
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
-DEFAULT_DB = os.environ.get("SWITCHBOARD_DB", str(Path.home() / ".switchboard" / "grace.sqlite3"))
+
+#: The one authoritative default ledger path. It is relative to the *service's* home, not
+#: to whatever directory a command happens to be run from, because Grace is the always-on
+#: headless service (PRD §1) and a working-directory default would silently create a second
+#: ledger. ``SWITCHBOARD_DB`` is the only override; the README documents both.
+DEFAULT_DB_ENV = "SWITCHBOARD_DB"
+DEFAULT_DB_DISPLAY = "~/.switchboard/grace.sqlite3"
+DEFAULT_DB = os.environ.get(DEFAULT_DB_ENV) or str(Path(os.path.expanduser(DEFAULT_DB_DISPLAY)))
+
+#: Columns added after the first release. ``CREATE TABLE IF NOT EXISTS`` cannot add a
+#: column to an existing database, so an existing ledger is upgraded in place here rather
+#: than silently missing the new state.
+ADDED_COLUMNS: dict[str, dict[str, str]] = {
+    "workspace_conversation": {
+        "archived_at": "TEXT",
+        "archive_reason": "TEXT",
+        "deleted_at": "TEXT",
+        "deletion_reason": "TEXT",
+    },
+    "job": {
+        "queue_state": "TEXT NOT NULL DEFAULT 'working'",
+        "review_state": "TEXT NOT NULL DEFAULT 'none'",
+        "needs_me_reason": "TEXT",
+        "archived_at": "TEXT",
+        "archive_reason": "TEXT",
+        "deleted_at": "TEXT",
+        "deletion_reason": "TEXT",
+    },
+}
+
 
 # Tables that carry an origin/mock_label pair and therefore must be labelled.
 LABELLED_TABLES = {
@@ -64,11 +93,84 @@ class Store:
         # executescript() manages its own transaction and implicitly commits, so this is
         # deliberately not wrapped in tx().
         self.conn.executescript(SCHEMA_PATH.read_text())
+        self._add_missing_columns()
+        # Per-job triage state is derived state: recomputing it here is idempotent and
+        # self-healing, and it backfills a ledger written before the column existed.
+        self._backfill_filter_states()
         self.conn.execute(
             "INSERT INTO schema_meta(key, value) VALUES('schema_version', ?) "
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (str(SCHEMA_VERSION),),
         )
+
+    def _add_missing_columns(self) -> None:
+        """Upgrade an existing ledger in place: CREATE TABLE IF NOT EXISTS adds nothing."""
+        for table, columns in ADDED_COLUMNS.items():
+            have = {row["name"] for row in self.all(f"PRAGMA table_info({table})")}
+            if not have:
+                continue  # table absent: schema.sql created nothing, nothing to upgrade
+            for name, declaration in columns.items():
+                if name not in have:
+                    self.conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
+
+    def _backfill_filter_states(self) -> None:
+        """Derive ``job.queue_state``/``review_state``/``needs_me_reason`` from job_state.
+
+        The mapping in :data:`contracts.JOB_FILTER_STATES` is a pure function of the
+        lifecycle state, so applying it at open time cannot contradict the ledger — it can
+        only repair a row that was written before per-job triage state existed.
+        """
+        with self.tx():
+            for job_state, (queue_state, review_state, reason) in C.JOB_FILTER_STATES.items():
+                self.conn.execute(
+                    "UPDATE job SET queue_state = ?, review_state = ?, needs_me_reason = ? "
+                    "WHERE job_state = ?", (queue_state, review_state, reason, job_state))
+            # A conversation's own state is the aggregate of its jobs. Conversations with
+            # no job keep whatever they have (an untriaged message has no job to derive
+            # from, and that state is not this function's to invent).
+            conversations = [row["ws_conv_id"] for row in self.all(
+                "SELECT DISTINCT ws_conv_id FROM job")]
+        for ws_conv_id in conversations:
+            # Opening the service must not look like activity: the backfill derives state
+            # only, and leaves ``updated_at`` (which drives list order and "age") alone.
+            self.recompute_conversation_filter_state(ws_conv_id, touch_updated_at=False)
+
+    def recompute_conversation_filter_state(self, ws_conv_id: str, *,
+                                            touch_updated_at: bool = True,
+                                            at: Optional[str] = None) -> Optional[dict]:
+        """Aggregate a conversation's own triage state from its live work items.
+
+        Most urgent job wins: needs_me beats working beats idle, and the reported reason
+        is the most urgent one present (``contracts.most_urgent_reason``). Archived and
+        deleted jobs do not drive the conversation's state — they are out of triage.
+        """
+        jobs = self.all(
+            "SELECT job_state, queue_state, review_state, needs_me_reason FROM job "
+            "WHERE ws_conv_id = ? AND archived_at IS NULL AND deleted_at IS NULL "
+            "ORDER BY created_at DESC", (ws_conv_id,))
+        if not jobs:
+            return None
+        at = at or C.now()
+        if any(job["queue_state"] == C.QueueState.NEEDS_ME for job in jobs):
+            active = [job for job in jobs if job["queue_state"] == C.QueueState.NEEDS_ME]
+            reason = C.most_urgent_reason([job["needs_me_reason"] for job in active])
+            review_state = next((job["review_state"] for job in active
+                                 if job["needs_me_reason"] == reason), active[0]["review_state"])
+            row = {"queue_state": C.QueueState.NEEDS_ME, "review_state": review_state,
+                   "needs_me_reason": reason, "updated_at": at}
+        elif any(job["queue_state"] == C.QueueState.WORKING for job in jobs):
+            row = {"queue_state": C.QueueState.WORKING, "review_state": C.ReviewState.NONE,
+                   "needs_me_reason": None, "updated_at": at}
+        else:
+            row = {"queue_state": C.QueueState.IDLE, "review_state": C.ReviewState.NONE,
+                   "needs_me_reason": None, "updated_at": at}
+        if not touch_updated_at:
+            row.pop("updated_at")
+        with self.tx():
+            self.update_row("workspace_conversation", row, "ws_conv_id = ?", (ws_conv_id,))
+        return row
+
 
     def close(self) -> None:
         self.conn.close()
@@ -143,6 +245,19 @@ class Store:
         sets = ", ".join(f"{k} = ?" for k in row)
         cur = self.conn.execute(f"UPDATE {table} SET {sets} WHERE {where}", tuple(row.values()) + tuple(where_args))
         return cur.rowcount
+
+    def try_insert_row(self, table: str, row: Mapping[str, Any]) -> bool:
+        """Insert a row, returning False when a uniqueness constraint already holds it.
+
+        Used where the schema — not the caller — owns an invariant (for example the
+        ``(ws_conv_id, COALESCE(job_id,''), version)`` scope of a draft version). Reporting
+        the conflict as ``False`` keeps the refusal typed instead of raising.
+        """
+        try:
+            self.insert_row(table, row)
+            return True
+        except sqlite3.IntegrityError:
+            return False
 
     def upsert_row(self, table: str, row: Mapping[str, Any], conflict_cols: Iterable[str]) -> None:
         self._require_origin(table, row)

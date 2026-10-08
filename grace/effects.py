@@ -24,6 +24,7 @@ Invariants this module exists to hold:
 from __future__ import annotations
 
 import json
+import sqlite3
 from typing import Any, Iterable, Optional
 
 from . import contracts as C
@@ -164,6 +165,20 @@ class Effects:
             version = int(self.store.scalar(
                 "SELECT COALESCE(MAX(version), 0) + 1 FROM draft WHERE ws_conv_id = ? "
                 "AND COALESCE(job_id,'') = COALESCE(?, '')", (ws_conv_id, job_id)) or 1)
+        # (ws_conv_id, job_id, version) is the draft's version scope. The schema enforces it
+        # with an expression index over COALESCE(job_id, '') because SQLite treats every NULL
+        # as distinct, so the plain UNIQUE constraint did nothing when job_id was NULL. This
+        # check turns that enforcement into a typed outcome instead of an IntegrityError.
+        existing = self.store.one(
+            "SELECT * FROM draft WHERE ws_conv_id = ? AND COALESCE(job_id,'') = COALESCE(?,'') "
+            "AND version = ?", (ws_conv_id, job_id, version))
+        if existing is not None:
+            return OpResult(C.IDEMPOTENT_REPLAY,
+                            f"draft v{version} already exists in this (conversation, job) "
+                            "scope; reusing it rather than creating a second version",
+                            data=self.draft_view(existing["draft_id"]),
+                            provenance=existing["origin"], label=existing["mock_label"],
+                            mocked=(existing["origin"] == C.MOCK))
         content_hash = C.sha256_hex({
             "account_id": conv["account_id"], "channel": conv["adapter"],
             "destination_conv_id": destination_conv_id, "mode": mode, "subject": subject,
@@ -173,7 +188,7 @@ class Effects:
         draft_id = C.new_id("draft")
         now = C.now()
         with self.store.tx():
-            self.store.insert_row("draft", {
+            if not self.store.try_insert_row("draft", {
                 "draft_id": draft_id, "ws_conv_id": ws_conv_id, "job_id": job_id,
                 "version": version, "parent_version": None, "immutable": 1,
                 "account_id": conv["account_id"], "channel": conv["adapter"],
@@ -188,7 +203,12 @@ class Effects:
                 "author": author, "superseded_by": None, "invalidated_at": None,
                 "invalidation_reason": None, "blocking_limitations": blocking_limitations,
                 "created_at": now, "origin": origin, "mock_label": mock_label,
-            })
+            }):
+                # Another writer took this version first: the schema refused the second row,
+                # so this is a typed conflict, not an exception.
+                return OpResult(C.CONFLICT,
+                                f"draft v{version} was just taken in this (conversation, job) "
+                                "scope; re-read the drafts before writing a new version")
             for i, ref in enumerate(refs, start=1):
                 ref_id = ref.get("attachment_ref_id")
                 if ref_id and self.store.one(
@@ -788,8 +808,12 @@ class Effects:
                                    reason="dispatch outcome unknown; reconciliation required before "
                                           "any retry",
                                    details={"effect_id": effect_id, "uncertain": True})
+            # WAITING_FOR_SOURCE would put this job in the *working* filter, which would hide
+            # the uncertainty from Needs me. The uncertainty is this job's own fact, so the
+            # job is flagged (PRD §5, §13; T15/T20) rather than only its conversation.
             self._flag_review(effect["ws_conv_id"], "uncertain_effect",
-                              "outbound outcome unknown — reconcile or review")
+                              "outbound outcome unknown — reconcile or review",
+                              job_id=job_id, review_state=ReviewState.BLOCKED)
         elif state == EffectState.FAILED:
             if outcome.code in C.RETRYABLE_EFFECT_OUTCOMES:
                 self.ledger.transition(job_id, JobState.WAITING_FOR_USER, actor="service",
@@ -797,20 +821,44 @@ class Effects:
                                               "authorization or an edit is needed",
                                        details={"effect_id": effect_id})
                 self._flag_review(effect["ws_conv_id"], "dispatch_failed_retryable",
-                                  "send failed before submission (nothing was sent)")
+                                  "send failed before submission (nothing was sent)",
+                                  job_id=job_id, review_state=ReviewState.AWAITING_INPUT)
             else:
                 self.ledger.transition(job_id, JobState.FAILED, actor="service",
                                        reason=f"dispatch failed: {outcome.code}",
                                        details={"effect_id": effect_id})
                 self._flag_review(effect["ws_conv_id"], "dispatch_failed",
-                                  f"send failed: {outcome.code}")
+                                  f"send failed: {outcome.code}",
+                                  job_id=job_id, review_state=ReviewState.BLOCKED)
 
-    def _flag_review(self, ws_conv_id: str, reason: str, note: str) -> None:
+    def _flag_review(self, ws_conv_id: str, reason: str, note: str, *,
+                     job_id: str | None = None,
+                     review_state: str | None = None) -> None:
+        """Put an item back on Needs me with its reason and its smallest next action.
+
+        The triage state is the JOB's, not the conversation's (PRD §5, §12; T04/T05/T12),
+        so when the flagged fact belongs to one work item — an uncertain outbound outcome,
+        a failed send — the job itself is moved onto Needs me with that reason. The
+        conversation row is then recomputed as the aggregate of its jobs, which keeps this
+        item visible on Needs me while every other job in the conversation keeps its own
+        state and its own reason instead of being overwritten by this one.
+        """
+        at = C.now()
         with self.store.tx():
-            self.store.update_row("workspace_conversation", {
-                "queue_state": QueueState.NEEDS_ME, "needs_me_reason": reason,
-                "updated_at": C.now(),
-            }, "ws_conv_id = ?", (ws_conv_id,))
+            if job_id:
+                fields: dict[str, Any] = {
+                    "queue_state": QueueState.NEEDS_ME, "needs_me_reason": reason,
+                    "updated_at": at,
+                }
+                if review_state is not None:
+                    fields["review_state"] = review_state
+                self.store.update_row("job", fields, "job_id = ?", (job_id,))
+                self.store.recompute_conversation_filter_state(ws_conv_id, at=at)
+            else:
+                self.store.update_row("workspace_conversation", {
+                    "queue_state": QueueState.NEEDS_ME, "needs_me_reason": reason,
+                    "updated_at": at,
+                }, "ws_conv_id = ?", (ws_conv_id,))
         self.add_result(ws_conv_id=ws_conv_id, job_id=None, kind="failure", summary=note,
                         detail={"reason": reason})
 
@@ -916,7 +964,8 @@ class Effects:
                       detail=outcome.detail, provenance=outcome.provenance, label=outcome.label),
             EffectState.OUTCOME_UNKNOWN)
         self._flag_review(effect["ws_conv_id"], "uncertain_effect",
-                          "send state could not be reconciled — operator review required")
+                          "send state could not be reconciled — operator review required",
+                          job_id=effect["job_id"], review_state=ReviewState.BLOCKED)
         return OpResult(C.OK, "reconciliation inconclusive: outcome unknown, retry refused",
                         data={"effect": self.effect_view(effect_id), "receipt_id": receipt_id})
 
@@ -1007,7 +1056,8 @@ class Effects:
                       adapter=effect["adapter"]),
             EffectState.OUTCOME_UNKNOWN)
         self._flag_review(effect["ws_conv_id"], "uncertain_effect",
-                          "cancel requested while the operation may already be submitted")
+                          "cancel requested while the operation may already be submitted",
+                          job_id=effect["job_id"], review_state=ReviewState.BLOCKED)
         return OpResult(C.OK, "cannot be stopped at this stage: marked outcome unknown and queued "
                               "for reconciliation",
                         data={"effect": self.effect_view(effect_id)})

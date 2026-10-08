@@ -42,7 +42,14 @@ from urllib.parse import parse_qs, unquote, urlparse
 from . import contracts as C
 from .contracts import ApprovalState, EffectState, JobState, QueueState
 from .effects import InjectedFault
+from .ingest import Ingest
+from .ledger import Ledger, _job_brief
 from .service import MOCK_WORKER_NOTE, Grace
+
+#: What an archived or deleted item is, said the same way on every surface. It is the
+#: ledger's own wording so the client and the ledger cannot drift apart (PRD §8, R08).
+RETENTION_NOTE = Ledger.RETENTION_NOTE
+
 
 WEBUI_DIR = Path(__file__).with_name("webui")
 TOKEN_HEADER = "X-Switchboard-Token"
@@ -502,9 +509,13 @@ def _make_handler(app: WebServer) -> type[BaseHTTPRequestHandler]:
                 return
             match = re.fullmatch(r"/api/conversation/([^/]+)", path)
             if match:
-                payload = self.app.page_conversation(match.group(1))
+                # ?job=<job_id> scopes the review page to ONE work item. A conversation may
+                # host several concurrent jobs and each has its own review page (T04/T05).
+                job_id = (query.get("job") or [""])[0] or None
+                payload = self.app.page_conversation(match.group(1), job_id)
                 if payload is None:
-                    self._error(404, "not_found", "No such workspace conversation.")
+                    self._error(404, "not_found",
+                                "No such workspace conversation, or no such job in it.")
                 else:
                     self._json(200, payload)
                 return
@@ -575,6 +586,19 @@ def _make_handler(app: WebServer) -> type[BaseHTTPRequestHandler]:
             if match:
                 effect_id, action = match.group(1), match.group(2)
                 self._json(200, getattr(self.app, f"action_effect_{action}")(effect_id, body))
+                return
+            # Archive is a state, not a delete: these routes change a state in the ledger and
+            # never remove a source row (PRD §8, R08).
+            match = re.fullmatch(r"/api/conversations/([^/]+)/(archive|unarchive|delete|restore)",
+                                 path)
+            if match:
+                ws_id, action = match.group(1), match.group(2)
+                self._json(200, getattr(self.app, f"action_conversation_{action}")(ws_id, body))
+                return
+            match = re.fullmatch(r"/api/jobs/([^/]+)/(archive|unarchive|delete|restore)", path)
+            if match:
+                job_id, action = match.group(1), match.group(2)
+                self._json(200, getattr(self.app, f"action_job_{action}")(job_id, body))
                 return
             self._error(404, "not_found", "No such path.")
 
@@ -720,32 +744,45 @@ class _AppMixin:
 
     # ----------------------------------------------------------- the queues -
     def _items(self, rows: list[dict]) -> list[dict]:
-        svc = self.svc
-        assert svc is not None
-        return [self._item(row) for row in rows]
+        return [self._item(row, row.get("job")) for row in rows]
 
-    def _item(self, ws: dict) -> dict:
+    def _item(self, ws: dict, job: Optional[dict] = None) -> dict:
+        """One review item, scoped to ONE work item.
+
+        ``job`` is the work item this row is about. Drafts, results, the latest outbound
+        operation and its approval are all read through that job, so a conversation
+        carrying two jobs shows two items with their own drafts instead of one item that
+        can only ever show the newest (PRD §5, §12; T04/T05/T12).
+        """
         svc = self.svc
         assert svc is not None
         ws_id = ws["ws_conv_id"]
+        job_id = (job or {}).get("job_id")
         meta = _mt((ws.get("latest_message") or {}).get("minimal_metadata"))
         links = [self._source_link(link) for link in ws.get("source_links", [])]
-        drafts = self._drafts_for(ws_id)
+        drafts = self._drafts_for(ws_id, job_id)
         draft = next((d for d in drafts if not d.get("superseded_by")), None)
-        approval = self._approval_for(ws_id, draft)
+        approval = self._approval_for(ws_id, draft, job_id=job_id)
+        scope = "AND job_id = ? " if job_id else ""
+        args: tuple = (ws_id, job_id) if job_id else (ws_id,)
         effect_row = svc.store.one(
-            "SELECT * FROM effect_operation WHERE ws_conv_id = ? ORDER BY created_at DESC LIMIT 1",
-            (ws_id,))
+            "SELECT * FROM effect_operation WHERE ws_conv_id = ? " + scope
+            + "ORDER BY created_at DESC LIMIT 1", args)
         receipt = None
         if effect_row is not None:
             receipt = svc.store.one(
                 "SELECT * FROM receipt WHERE effect_id = ? ORDER BY observed_at DESC LIMIT 1",
                 (effect_row["effect_id"],))
         results = svc.store.all(
-            "SELECT * FROM result WHERE ws_conv_id = ? ORDER BY version DESC LIMIT 3", (ws_id,))
-        latest_job = (ws.get("jobs") or [None])[0]
+            "SELECT * FROM result WHERE ws_conv_id = ? " + scope + "ORDER BY version DESC LIMIT 3",
+            args)
+        latest_job = job if job is not None else ((ws.get("jobs") or [None])[0] or None)
+        work_item_id = ws.get("work_item_id") or (
+            f"{ws_id}::{job_id}" if job_id else f"{ws_id}::conversation")
         item = {
             "ws_conv_id": ws_id,
+            "work_item_id": work_item_id,
+            "job_id": job_id,
             "title": ws["title"],
             "association": ws["association"],
             "queue_state": ws["queue_state"],
@@ -757,6 +794,16 @@ class _AppMixin:
             "current_input_revision": ws["current_input_revision"],
             "updated_at": ws["updated_at"],
             "age": human_age(ws["updated_at"]),
+            # Archive and deletion are two different facts, and both travel with every
+            # item so a client can never render one as the other (PRD §8, R08).
+            "archive_state": ws.get("archive_state") or C.ArchiveState.ACTIVE,
+            "archived_at": ws.get("archived_at"),
+            "archive_reason": ws.get("archive_reason"),
+            "deletion_state": ws.get("deletion_state") or C.DeletionState.RETAINED,
+            "deleted_at": ws.get("deleted_at"),
+            "deletion_reason": ws.get("deletion_reason"),
+            "retention_note": (RETENTION_NOTE
+                               if (ws.get("archived_at") or ws.get("deleted_at")) else None),
             "source_links": links,
             "source_accounts": [link["account"] for link in links],
             "audience": [link["audience"] for link in links],
@@ -822,13 +869,19 @@ class _AppMixin:
             rows = svc.all_conversations(limit=200)
             note = ("People, groups and preserved source threads, including completed and "
                     "application-hidden items. Hidden is not deleted; every provider id, account "
-                    "and audience is preserved.")
-        if view == "all" and state != "all":
+                    "and audience is preserved. Archived items are listed here and labelled "
+                    "archived — archive is a state, not a deletion.")
+        if view == "all" and state == "archived":
+            rows = [r for r in rows if r.get("archived_at")]
+        elif view == "all" and state != "all":
             rows = [r for r in rows if r["queue_state"] == state]
         items = self._items(rows)
         if view == "all" and q.strip():
             items = [item for item in items if self._matches(item, q)]
         counts = svc.ledger.counts()
+        # Archived items are counted separately: they are outside needs_me/working by design,
+        # and folding them into those totals would make the counts tell a different story.
+        archived = svc.ledger.archived_count()
         sources = svc.ingest.source_health()
         return self._wrapped({
             "view": view,
@@ -839,6 +892,7 @@ class _AppMixin:
             "shown": len(items),
             "counts": counts,
             "counts_independent": True,
+            "archived_counts": archived,
             "review_summary": self._review_summary(items),
             "disconnected_states": self._disconnected_states(sources),
             "empty_is_a_real_result": ("An empty list here comes from the durable ledger. If a source "
@@ -990,12 +1044,18 @@ class _AppMixin:
             "mock_label": row.get("mock_label"),
         }
 
-    def _drafts_for(self, ws_id: str) -> list[dict]:
+    def _drafts_for(self, ws_id: str, job_id: Optional[str] = None) -> list[dict]:
         svc = self.svc
         assert svc is not None
-        rows = svc.store.all(
-            "SELECT draft_id FROM draft WHERE ws_conv_id = ? ORDER BY version DESC, created_at DESC "
-            "LIMIT 6", (ws_id,))
+        if job_id:
+            # This work item's own drafts, not every draft in the conversation.
+            rows = svc.store.all(
+                "SELECT draft_id FROM draft WHERE ws_conv_id = ? AND job_id = ? "
+                "ORDER BY version DESC, created_at DESC LIMIT 6", (ws_id, job_id))
+        else:
+            rows = svc.store.all(
+                "SELECT draft_id FROM draft WHERE ws_conv_id = ? ORDER BY version DESC, created_at DESC "
+                "LIMIT 6", (ws_id,))
         return [self._draft_view(row["draft_id"]) for row in rows]
 
     def _draft_view(self, draft_id: str) -> dict:
@@ -1087,7 +1147,8 @@ class _AppMixin:
                     add(key, value)
         return lines
 
-    def _approval_for(self, ws_id: str, draft: Optional[dict]) -> Optional[dict]:
+    def _approval_for(self, ws_id: str, draft: Optional[dict],
+                      *, job_id: Optional[str] = None) -> Optional[dict]:
         svc = self.svc
         assert svc is not None
         row = None
@@ -1096,9 +1157,16 @@ class _AppMixin:
                 "SELECT * FROM approval WHERE draft_id = ? ORDER BY issued_at DESC LIMIT 1",
                 (draft["draft_id"],))
         if row is None:
-            row = svc.store.one(
-                "SELECT a.* FROM approval a JOIN draft d ON d.draft_id = a.draft_id "
-                "WHERE d.ws_conv_id = ? ORDER BY a.issued_at DESC LIMIT 1", (ws_id,))
+            if job_id:
+                row = svc.store.one(
+                    "SELECT a.* FROM approval a JOIN draft d ON d.draft_id = a.draft_id "
+                    "WHERE d.ws_conv_id = ? AND d.job_id = ? ORDER BY a.issued_at DESC LIMIT 1",
+                    (ws_id, job_id))
+            else:
+                row = svc.store.one(
+                    "SELECT a.* FROM approval a JOIN draft d ON d.draft_id = a.draft_id "
+                    "WHERE d.ws_conv_id = ? ORDER BY a.issued_at DESC LIMIT 1", (ws_id,))
+
         if row is None:
             return None
         view = svc.effects.approval_view(row["approval_id"])
@@ -1125,7 +1193,14 @@ class _AppMixin:
         return view
 
     # -------------------------------------------------------- conversation --
-    def page_conversation(self, ws_id: str) -> Optional[dict]:
+    def page_conversation(self, ws_id: str, job_id: Optional[str] = None) -> Optional[dict]:
+        """One conversation's review page, scoped to ONE work item when a job is named.
+
+        A conversation may host several concurrent jobs (T04). Without ``job_id`` the page
+        describes the conversation's aggregate state and lists every job; with ``job_id``
+        the drafts, results, effect and approval shown are that job's own. An unknown or
+        foreign job id is refused rather than silently falling back to the newest job.
+        """
         svc = self.svc
         assert svc is not None
         ws_row = svc.store.one("SELECT * FROM workspace_conversation WHERE ws_conv_id = ?",
@@ -1133,7 +1208,17 @@ class _AppMixin:
         if ws_row is None:
             return None
         ws = svc.ledger._ws_brief(ws_row)
-        item = self._item(ws)
+        job_row = None
+        if job_id:
+            job_row = svc.store.one("SELECT * FROM job WHERE job_id = ?", (job_id,))
+            if job_row is None or job_row["ws_conv_id"] != ws_id:
+                return None
+            ws["queue_state"] = job_row["queue_state"]
+            ws["review_state"] = job_row["review_state"]
+            ws["needs_me_reason"] = job_row["needs_me_reason"]
+            ws["work_item_id"] = f"{ws_id}::{job_id}"
+        item = self._item(ws, _job_brief(job_row, ws_row) if job_row else None)
+
         source_conversations = []
         for link in ws["source_links"]:
             conv = svc.store.one("SELECT * FROM source_conversation WHERE conv_id = ?",
@@ -1174,6 +1259,25 @@ class _AppMixin:
             receipt = effect["receipts"][-1] if effect.get("receipts") else None
         return self._wrapped({
             "conversation": item,
+            "retention": {
+                "storage_state": "retained" if item["deletion_state"] == "retained" else "retained_tombstone",
+                "archive_state": item["archive_state"],
+                "deletion_state": item["deletion_state"],
+                "note": item["retention_note"] or (
+                    "Active: not archived and not deleted. Nothing here removes or rewrites "
+                    "anything in the source apps."),
+                "source_rows_deleted": False,
+                "recoverable": True,
+            },
+            "review_item": {"work_item_id": item["work_item_id"], "job_id": item["job_id"],
+                            "queue_state": item["queue_state"],
+                            "review_state": item["review_state"],
+                            "needs_me_reason": item["needs_me_reason"],
+                            "note": ("This review page is scoped to this work item. Other jobs in "
+                                     "this conversation keep their own state and their own drafts."
+                                     if item["job_id"] else
+                                     "No job was named, so this page shows the conversation's own "
+                                     "aggregate state and every job it hosts.")},
             "source_conversations": source_conversations,
             "source_attachments": attachments,
             "jobs": jobs,
@@ -1378,8 +1482,24 @@ class _AppMixin:
             "rule_note": ("Rules are versioned and inspectable. A rule can create drafting work; it "
                           "cannot grant standing send authority (R10, R14, PRD §7)."),
             "sources": sources,
+            "health_axes": {
+                "order": list(Ingest.AXES),
+                "labels": {
+                    "transport": "Transport — can this source be reached at all?",
+                    "freshness": "Freshness — when was it last observed?",
+                    "coverage": "Coverage — is the history complete, and if not, why not?",
+                },
+                "healthy_states": {k: list(v) for k, v in Ingest.AXIS_HEALTHY.items()},
+                "note": ("Three separate axes, each with its own typed state and its own reason. An "
+                         "axis whose value is unknown reads 'unknown' and is never green; no axis "
+                         "borrows another's good news. The state last written to the ledger is shown "
+                         "as a further labelled axis, never blended into these three (PRD §6, R09)."),
+                "severities": ["ok", "warn", "danger", "unknown"],
+                "unknown_is_not_green": True,
+            },
             "coverage": svc.ingest.coverage(),
             "disconnected_states": self._disconnected_states(sources),
+            "archived_counts": svc.ledger.archived_count(),
             "freshness_note": ("Observed freshness is the source's own last success time as recorded "
                                "by this deployment. The expected polling cadence is not declared by "
                                "the capability contract, so this client shows observed freshness "
@@ -1603,6 +1723,66 @@ class _AppMixin:
             "note": ("Only a definite pre-submission failure may be retried, under the same "
                      "authorization and the same idempotency key. An uncertain outcome is refused "
                      "and must be reconciled (PRD §10, R15).")})
+
+    # -- archive and deletion: states, never row removals (PRD §8, R08) ----
+    def _retention_payload(self, res: Any, body: dict, *, what: str) -> dict:
+        extra = {
+            "mocked": True, "mock_label": C.mock_label("retention"),
+            "retention_note": RETENTION_NOTE,
+            "data": res.data,
+            "what": what,
+            "reason": str(body.get("reason") or ""),
+            "note": ("Nothing was removed from storage and nothing was changed in the source "
+                     "apps. An archived item stays retrievable; a deleted one is an application "
+                     "tombstone that is listed only when explicitly asked for."),
+        }
+        if res.ok and res.data:
+            extra["archive_state"] = res.data.get("archive_state")
+            extra["deletion_state"] = res.data.get("deletion_state")
+        return self._result_payload(res, extra=extra)
+
+    def _retention_run(self, action: str, ws_conv_id: Optional[str], job_id: Optional[str],
+                       body: dict, *, what: str) -> dict:
+        svc = self.svc
+        assert svc is not None
+        method = {
+            "archive": svc.ledger.archive_item,
+            "unarchive": svc.ledger.unarchive_item,
+            "delete": svc.ledger.delete_item,
+            "restore": svc.ledger.restore_item,
+        }[action]
+        res = method(ws_conv_id=ws_conv_id, job_id=job_id,
+                     reason=str(body.get("reason") or ""), actor="owner")
+        return self._retention_payload(res, body, what=what)
+
+    def action_conversation_archive(self, ws_id: str, body: dict) -> dict:
+        return self._retention_run("archive", ws_id, None, body,
+                                   what=f"workspace conversation {ws_id}")
+
+    def action_conversation_unarchive(self, ws_id: str, body: dict) -> dict:
+        return self._retention_run("unarchive", ws_id, None, body,
+                                   what=f"workspace conversation {ws_id}")
+
+    def action_conversation_delete(self, ws_id: str, body: dict) -> dict:
+        return self._retention_run("delete", ws_id, None, body,
+                                   what=f"workspace conversation {ws_id}")
+
+    def action_conversation_restore(self, ws_id: str, body: dict) -> dict:
+        return self._retention_run("restore", ws_id, None, body,
+                                   what=f"workspace conversation {ws_id}")
+
+    def action_job_archive(self, job_id: str, body: dict) -> dict:
+        return self._retention_run("archive", None, job_id, body, what=f"job {job_id}")
+
+    def action_job_unarchive(self, job_id: str, body: dict) -> dict:
+        return self._retention_run("unarchive", None, job_id, body, what=f"job {job_id}")
+
+    def action_job_delete(self, job_id: str, body: dict) -> dict:
+        return self._retention_run("delete", None, job_id, body, what=f"job {job_id}")
+
+    def action_job_restore(self, job_id: str, body: dict) -> dict:
+        return self._retention_run("restore", None, job_id, body, what=f"job {job_id}")
+
 
 
 class WebApp(_AppMixin, WebServer):

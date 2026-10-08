@@ -225,3 +225,16 @@ th { color: var(--ink-soft); font-size: 0.75rem; text-transform: uppercase; lett
   main { padding: 1rem; }
   .kv { grid-template-columns: minmax(8rem, 22%) 1fr; }
 }
+.pill.state-unknown { background: var(--warn-bg); color: var(--warn); border-style: dashed; }
+.pill.state-archived { background: var(--accent-soft, #eef); color: var(--ink-soft); }
+.pill.state-deleted { background: var(--danger-bg); color: var(--danger); }
+.axes { display: grid; gap: 0.5rem; margin: 0.5rem 0; }
+.axis { border-left: 4px solid var(--line); padding: 0.3rem 0.6rem; background: var(--card); }
+.axis h4 { margin: 0 0 0.2rem; font-size: 0.85rem; }
+.axis p { margin: 0.15rem 0; font-size: 0.82rem; }
+.axis.severity-ok { border-left-color: var(--ok); }
+.axis.severity-warn { border-left-color: var(--warn); }
+.axis.severity-danger { border-left-color: var(--danger); }
+/* An unknown axis is never rendered green: it keeps the dashed, muted treatment. */
+.axis.severity-unknown { border-left-style: dashed; border-left-color: var(--ink-soft); }
+.item-actions { display: flex; gap: 0.4rem; margin-top: 0.4rem; }
