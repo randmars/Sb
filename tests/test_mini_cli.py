@@ -83,6 +83,16 @@ def json_documents(proc: subprocess.CompletedProcess, case: str) -> list:
     return documents
 
 
+def documented_rows(rows: list) -> list:
+    """Rows read out of the Gate 2 probe pack: they contacted nothing, on any host."""
+    return [r for r in rows if r["origin"] == O.DOCUMENTATION]
+
+
+def measured_rows(rows: list) -> list:
+    """Rows this host produced itself (fixture or real), not documentation reads."""
+    return [r for r in rows if r["origin"] != O.DOCUMENTATION]
+
+
 def values_of(document, key: str) -> list:
     """Every value stored under ``key`` anywhere in the document."""
     found = []
@@ -148,14 +158,29 @@ class TestEveryCommandRealMode(CliCaseMixin, unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         rows = json_documents(proc, "real probe")
         self.assertEqual([r["capability"] for r in rows], list(CAPABILITY_NAMES))
+        documented = documented_rows(rows)
+        measured = measured_rows(rows)
+        self.assertTrue(documented, "the documented capabilities must still be reported")
+        self.assertTrue(measured)
         for row in rows:
             missing = [f for f in ROW_FIELDS + ROW_LABELLING_FIELDS if f not in row]
             self.assertEqual(missing, [], f"{row['capability']} is missing {missing}")
             self.assertIn(row["state"], ROW_STATES)
+            self.assertFalse(row["real_source_connected"], row["capability"])
+        for row in documented:
+            # a page read is not a measurement on any host, including this one
+            self.assertFalse(row["supported"], row["capability"])
+            self.assertEqual(row["state"], O.PROBE_UNMEASURED)
+            self.assertFalse(row["adapter_is_real"], row["capability"])
+            self.assertFalse(row["values_from_source"], row["capability"])
+            self.assertTrue(O.is_documentation_label(row["label"]), row["label"])
+            self.assertTrue(row["citations"], row["capability"])
+        for row in measured:
             # the real adapter answered on a host where it cannot read Mail
             self.assertTrue(row["adapter_is_real"])
-            self.assertFalse(row["real_source_connected"])
             self.assertFalse(row["values_from_source"])
+            self.assertEqual(list(row["citations"]), [],
+                             "only a documentation row may cite the pack")
             if row["capability"] == "manifest":
                 # ... except the manifest row, which describes the worker itself and so
                 # can be supported while holding no source value.
@@ -254,12 +279,29 @@ class TestEveryCommandFixtureMode(CliCaseMixin, unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         rows = json_documents(proc, "fixture probe")
         self.assertEqual([r["capability"] for r in rows], list(CAPABILITY_NAMES))
-        for row in rows:
-            self.assertEqual(row["origin"], O.FIXTURE)
-            self.assertFalse(row["adapter_is_real"])
-            self.assertFalse(row["real_source_connected"])
-            self.assertTrue(O.is_fixture_label(row["label"]))
-            self.assertIn("No Mail.app was contacted", row["disclaimer"])
+        documented = documented_rows(rows)
+        measured = measured_rows(rows)
+        self.assertTrue(measured)
+        self.assertTrue(documented)
+        for row in measured:
+            with self.subTest(capability=row["capability"]):
+                self.assertEqual(row["origin"], O.FIXTURE)
+                self.assertFalse(row["adapter_is_real"])
+                self.assertFalse(row["real_source_connected"])
+                self.assertTrue(O.is_fixture_label(row["label"]))
+                self.assertIn("No Mail.app was contacted", row["disclaimer"])
+        for row in documented:
+            # Recorded fixtures answer ``fixture``; the pack rows contacted nothing at all on
+            # any host, so they are ``documentation`` -- and never supported.
+            with self.subTest(capability=row["capability"]):
+                self.assertEqual(row["origin"], O.DOCUMENTATION)
+                self.assertNotEqual(row["source"], "mail")
+                self.assertFalse(row["supported"])
+                self.assertEqual(row["state"], O.PROBE_UNMEASURED)
+                self.assertFalse(row["adapter_is_real"])
+                self.assertFalse(row["real_source_connected"])
+                self.assertTrue(O.is_documentation_label(row["label"]), row["label"])
+                self.assertTrue(row["citations"], row["capability"])
         self.assertNoSourceClaimed(rows, "fixture probe")
 
     def test_run(self) -> None:

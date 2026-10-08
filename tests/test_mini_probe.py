@@ -9,16 +9,37 @@ for a measurement of Randy's machine.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import unittest
+from pathlib import Path
 
 from switchboard_mini import outcomes as O
 from switchboard_mini.mail_adapter import build_adapter
 from switchboard_mini.probe import (CAPABILITY_NAMES, CAPABILITIES,
-                                    DOCUMENTED_CAPABILITY_NAMES,
+                                    DOCUMENTED_CAPABILITY_NAMES, ROW_FIELDS,
                                     ROW_LABELLING_FIELDS, run_probe)
 
 PERMISSION_STATES = set(O.PERMISSION_STATES)
+
+#: The Gate 2 probe pack. A documentation row cites ``O01``-``O22``; every citation must
+#: name a record that is really there, so a citation can never point at nothing. The path
+#: is overridable for a checkout that keeps the pack elsewhere.
+PACK_DIR = Path(os.environ.get("SWITCHBOARD_PROBE_PACK", "/home/team/shared/probe-pack"))
+
+
+def pack_refs() -> set:
+    """The record ids the pack actually holds, e.g. ``{'O01', ..., 'O22'}``."""
+    return {p.name.split("-")[0] for p in PACK_DIR.glob("O*.md")}
+
+
+def documentation_rows(rows: list) -> list:
+    return [r for r in rows if r["origin"] == O.DOCUMENTATION]
+
+
+def measured_rows(rows: list) -> list:
+    """Rows this host produced itself (fixture or real), not documentation reads."""
+    return [r for r in rows if r["origin"] != O.DOCUMENTATION]
 
 
 def probe_rows(scenario: str = "granted", **kw) -> list:
@@ -70,12 +91,12 @@ class TestProbeRowShape(unittest.TestCase):
         self.assertFalse(manifest["probed"])
         self.assertEqual([n for n, c in manifest["capabilities"].items() if c["supported"]],
                          [])
-        for entry in manifest["capabilities"].values():
+        for capability, entry in manifest["capabilities"].items():
             if entry.get("origin") == O.DOCUMENTATION:
                 # A documented capability cannot be measured by this worker at all: it is
                 # unmeasured, and saying "run the probe" would imply otherwise.
                 self.assertEqual(entry["state"], "unmeasured")
-                self.assertTrue(entry["citations"], entry["name"])
+                self.assertTrue(entry["citations"], capability)
                 continue
             self.assertEqual(entry["state"], "unverified")
             self.assertIn("probe", entry["limitation"])
@@ -110,15 +131,62 @@ class TestProbeRowShape(unittest.TestCase):
 
 
 class TestProbeLabelling(unittest.TestCase):
-    """Fixture rows must be visibly fixture rows."""
+    """Every row is labelled for what it actually contacted -- and for nothing else.
+
+    Two kinds of row come out of one probe run and they may never be confused:
+
+    * rows this host produced from a recorded scenario, labelled ``FIXTURE:``; and
+    * rows read out of the Gate 2 probe pack, labelled ``DOCUMENTATION:<source>(O##)``,
+      ``supported: false``, ``state: unmeasured``, with citations that must exist.
+    """
 
     def test_fixture_rows_are_labelled_and_never_claim_a_real_source(self) -> None:
         for scenario in ("granted", "permission_denied", "offline", "partial_history"):
-            for row in probe_rows(scenario):
-                self.assertEqual(row["origin"], O.FIXTURE)
-                self.assertFalse(row["real_source_connected"])
-                self.assertTrue(O.is_fixture_label(row["label"]), row["label"])
-                self.assertIn("No Mail.app was contacted", row["disclaimer"])
+            rows = probe_rows(scenario)
+            measured = measured_rows(rows)
+            self.assertTrue(measured)
+            for row in measured:
+                with self.subTest(scenario=scenario, capability=row["capability"]):
+                    self.assertEqual(row["origin"], O.FIXTURE)
+                    self.assertFalse(row["adapter_is_real"])
+                    self.assertFalse(row["real_source_connected"])
+                    self.assertTrue(O.is_fixture_label(row["label"]), row["label"])
+                    self.assertIn("No Mail.app was contacted", row["disclaimer"])
+
+    def test_documentation_rows_are_labelled_as_documentation_and_never_supported(self) -> None:
+        for scenario in ("granted", "permission_denied", "offline", "partial_history"):
+            rows = documentation_rows(probe_rows(scenario))
+            self.assertEqual(len(rows), len(DOCUMENTED_CAPABILITY_NAMES))
+            for row in rows:
+                with self.subTest(scenario=scenario, capability=row["capability"]):
+                    self.assertEqual(row["origin"], O.DOCUMENTATION)
+                    self.assertFalse(row["supported"])
+                    self.assertEqual(row["state"], O.PROBE_UNMEASURED)
+                    self.assertFalse(row["real_source_connected"])
+                    self.assertFalse(row["values_from_source"])
+                    self.assertTrue(row["citations"], row["capability"])
+                    self.assertTrue(O.is_documentation_label(row["label"]), row["label"])
+                    self.assertEqual(row["label"],
+                                     O.documentation_label(row["source"], row["citations"]))
+                    for ref in row["citations"]:
+                        self.assertIn(ref, row["label"])
+
+    def test_every_documentation_citation_names_a_record_that_exists(self) -> None:
+        self.assertTrue(PACK_DIR.is_dir(), f"the probe pack is not at {PACK_DIR}")
+        available = pack_refs()
+        self.assertTrue(available, f"no records in {PACK_DIR}")
+        for row in documentation_rows(probe_rows()):
+            for ref in row["citations"]:
+                with self.subTest(capability=row["capability"], ref=ref):
+                    self.assertIn(ref, available,
+                                  f"{row['capability']} cites {ref}, which the pack does "
+                                  f"not hold")
+
+    def test_no_row_cites_the_pack_without_being_a_documentation_row(self) -> None:
+        for row in measured_rows(probe_rows()):
+            with self.subTest(capability=row["capability"]):
+                self.assertEqual(list(row["citations"]), [],
+                                 "only a documentation row may cite the probe pack")
 
     def test_fixture_outcomes_are_labelled_too(self) -> None:
         adapter = build_adapter(fixture_mode=True, fixture_scenario="granted")
@@ -251,10 +319,19 @@ class TestProvenanceHonesty(unittest.TestCase):
 
     def test_fixture_rows_report_neither(self) -> None:
         for scenario in ("granted", "permission_denied", "offline", "partial_history"):
-            for row in probe_rows(scenario):
+            for row in measured_rows(probe_rows(scenario)):
                 self.assertFalse(row["adapter_is_real"], row["capability"])
                 self.assertFalse(row["real_source_connected"], row["capability"])
                 self.assertEqual(row["origin"], O.FIXTURE)
+
+    def test_documentation_rows_claim_no_contact_either(self) -> None:
+        for scenario in ("granted", "permission_denied", "offline", "partial_history"):
+            for row in documentation_rows(probe_rows(scenario)):
+                self.assertFalse(row["adapter_is_real"], row["capability"])
+                self.assertFalse(row["real_source_connected"], row["capability"])
+                self.assertFalse(row["values_from_source"], row["capability"])
+                self.assertEqual(row["origin"], O.DOCUMENTATION)
+                self.assertEqual(row["evidence"]["no_source_contacted"], True)
 
     def test_real_adapter_rows_claim_no_source_on_a_host_without_mail(self) -> None:
         if sys.platform == "darwin":     # pragma: no cover - this computer is Linux
@@ -301,6 +378,47 @@ class TestProvenanceHonesty(unittest.TestCase):
             self.assertEqual(manifest["adapter_is_real"], not fixture_mode)
             self.assertEqual(manifest["folded_probe_rows"]["any_from_real_source"], False)
             json.dumps(manifest)
+
+
+class TestDocumentationRowsCanNeverBeSupported(unittest.TestCase):
+    """The scope statement, enforced on the write path this worker owns.
+
+    ``probe._row`` refuses to build such a row, and Grace refuses to store one
+    (``grace/contracts.py::probe_row_supported_claim_allowed``, exercised in
+    ``tests/test_probe_import.py``). The two sides must agree: this is the mini half.
+    """
+
+    def test_the_rule_itself_refuses_a_supported_documentation_row(self) -> None:
+        self.assertFalse(O.probe_row_supported_claim_allowed(
+            {"origin": O.DOCUMENTATION, "supported": True}))
+        self.assertTrue(O.probe_row_supported_claim_allowed(
+            {"origin": O.DOCUMENTATION, "supported": False}))
+        self.assertTrue(O.probe_row_supported_claim_allowed(
+            {"origin": O.REAL, "supported": True}))
+
+    def test_every_documentation_row_from_a_real_run_is_unsupported(self) -> None:
+        for fixture_mode in (True, False):
+            adapter = build_adapter(fixture_mode=fixture_mode)
+            for row in documentation_rows(run_probe(adapter).rows):
+                with self.subTest(fixture_mode=fixture_mode, capability=row["capability"]):
+                    self.assertFalse(row["supported"])
+                    # The rule answers "may this row carry supported: true?" -- for a
+                    # documentation row the answer must be no, whatever the row says.
+                    self.assertFalse(O.probe_row_supported_claim_allowed(
+                        dict(row, supported=True)))
+                    self.assertTrue(O.probe_row_supported_claim_allowed(row))
+
+    def test_the_row_builder_refuses_to_make_one_supported(self) -> None:
+        from switchboard_mini.probe import Capability, ProbeContext, _row
+        adapter = build_adapter(fixture_mode=True, fixture_scenario="granted")
+        context = ProbeContext(adapter)
+        capability = Capability(name="beeper_send", title="Send through Beeper",
+                                probe_method="documentation read", probe_assertion="none",
+                                source="beeper", documented_only=True)
+        with self.assertRaises(ValueError):
+            _row(context, capability, supported=True, state=O.PROBE_UNMEASURED,
+                 permission_state=O.PERMISSION_NOT_DETERMINED, limitation="doc only",
+                 evidence={}, origin=O.DOCUMENTATION)
 
 
 class TestCapabilityDeclaration(unittest.TestCase):

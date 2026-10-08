@@ -117,9 +117,55 @@ NEXT_ACTIONS: dict[str, str] = {
     "token_reset":
         "The source's change token was reset. Run a full re-enumeration for this scope; unrelated "
         "relationship data is kept.",
+    "error":
+        "The source answered with an error rather than a reachable state. Read the recorded "
+        "reason, then repeat the read; it is read-only and the stored cursor is untouched.",
+    "unmeasured":
+        "Nothing has measured this capability yet, so it is not offered. Record a probe result "
+        "for it on the Mini worker (Gate 2) and re-run `grace probe-import`.",
+    "harness_error":
+        "The Mini worker's probe harness failed while producing this row, so no source answer "
+        "was recorded. Fix the harness, then re-run the probe.",
     "unknown":
         "Run the Gate 2 probe for this capability to establish its real state.",
 }
+
+# -----------------------------------------------------------------------------
+# Which values may be rendered as a *condition the owner must act on*.
+#
+# Two vocabularies live in the source data and they are not interchangeable:
+#
+# * an **observed outcome code** -- what this run's health probe or a probe row answered
+#   (``success``/``ok`` mean "healthy" here);
+# * a **source state** -- what the ledger stores for an account (``connected``/``syncing``/
+#   ``current`` mean "healthy" here).
+#
+# ``next_action_for`` is defined over the *condition* vocabulary below: every state the
+# client can show carries the smallest next action for it, and nothing else is ever
+# rendered as itself. ``condition_state`` is the one place a raw value is normalised, so a
+# healthy code compared against the wrong vocabulary cannot reach the owner as a condition
+# with no next action (the regression this pair exists to prevent).
+# -----------------------------------------------------------------------------
+CONDITION_STATES: tuple = tuple(NEXT_ACTIONS)
+
+#: A permission state -> the typed condition to show. ``granted`` and ``not_applicable`` are
+#: the only two that mean "no permission problem" (``contracts.PERMISSION_OK_STATES``); the
+#: rest become one typed condition each, so a revoked permission is reported as a permission
+#: condition rather than as whatever unrelated health word happened to sit beside it.
+PERMISSION_CONDITIONS: dict = {
+    C.PERMISSION_STATE_DENIED: C.PERMISSION_DENIED,
+    C.PERMISSION_NOT_DETERMINED: "unknown",
+}
+
+
+def condition_state(state: Optional[str]) -> str:
+    """The typed condition ``state`` may be rendered as.
+
+    A value the client knows how to act on is rendered as itself. Anything else -- a raw
+    adapter code from another vocabulary, a half-known word -- becomes ``unknown``, which
+    does carry a next action. A condition is therefore never listed without one.
+    """
+    return state if state in NEXT_ACTIONS else "unknown"
 
 DRAFT_STATE_LABELS = {
     "awaiting_review": "Result ready — review the draft",
@@ -710,34 +756,54 @@ class _AppMixin:
 
         Two things are reported side by side, because they are not the same fact:
 
-        * the state **observed just now** by the adapter's health probe (``health_state``,
-          with what was stored kept in ``stored_health_state``), and
-        * the state **last recorded in the ledger**, when it differs and is itself a
-          condition the owner should see — a revoked permission stays revoked while a
-          source is offline, and neither fact may hide the other (PRD §6, §13, R09, T20).
+        * the state **observed just now** by the adapter's health probe
+          (``observed_health_state``), and
+        * the state **last recorded in the ledger** (``stored_health_state``), when it
+          differs and is itself a condition the owner should see — a revoked permission
+          stays revoked while a source is offline, and neither fact may hide the other
+          (PRD §6, §13, R09, T20).
+
+        The two vocabularies are kept apart on purpose. A health probe answers in *observed
+        outcome codes* (``success``/``ok`` are healthy there); the ledger stores a *source
+        state* (``connected``/``syncing``/``current`` are healthy there). Comparing one
+        against the other's healthy set is what once rendered a healthy source as a degraded
+        condition whose ``state`` was the raw code ``ok`` and whose ``next_action`` was
+        meaningless. Observed is checked against observed, stored against stored, and every
+        listed condition goes through ``condition_state`` so its ``state`` is one the client
+        knows how to act on. A healthy source is not listed at all.
         """
         out: list[dict] = []
-        # One definition of a healthy source, imported rather than restated: this list used
-        # to disagree with the ingest layer's, so a source that layer read as healthy could
-        # be shown to the owner here as disconnected.
-        healthy = set(Ingest.HEALTHY_SOURCE_STATES)
-        permission_ok = C.PERMISSION_OK_STATES
         for account in sources:
-            observed = account.get("health_state")
+            observed = account.get("observed_health_state")
             stored = account.get("stored_health_state")
+            permission = account.get("permission_state")
             conditions: list[tuple[str, str, str]] = []
-            if observed not in healthy or account.get("permission_state") not in permission_ok:
+            if observed and observed not in Ingest.HEALTHY_OBSERVED_STATES:
                 conditions.append((
                     observed,
-                    account.get("health_detail") or f"source reports {observed}",
+                    account.get("health_detail")
+                    or f"the adapter's health probe answered {observed!r} for this account",
                     "observed just now (health probe of this run)"))
-            if stored and stored != observed and (
-                    stored not in healthy or account.get("permission_state") not in permission_ok):
+            if stored and stored != observed and stored not in Ingest.HEALTHY_SOURCE_STATES:
                 conditions.append((
                     stored,
-                    account.get("stored_health_detail") or f"the last recorded state was {stored}",
+                    account.get("stored_health_detail")
+                    or f"the last state recorded in the ledger was {stored!r}",
                     "last state recorded in the ledger (not this run's probe)"))
-            for state, reason, basis in conditions:
+            if permission not in C.PERMISSION_OK_STATES:
+                conditions.append((
+                    PERMISSION_CONDITIONS.get(permission, "unknown"),
+                    account.get("health_detail")
+                    or f"this account's permission is {permission!r}, not granted",
+                    "the account's own permission state, read independently of its transport"))
+            seen: set = set()
+            for raw_state, reason, basis in conditions:
+                state = condition_state(raw_state)
+                if state in seen:
+                    # One entry per typed condition per account: the same fact observed and
+                    # stored, or a permission already named above, is one condition, not two.
+                    continue
+                seen.add(state)
                 out.append({
                     "kind": "source",
                     "adapter": account.get("adapter"),
@@ -745,12 +811,13 @@ class _AppMixin:
                     "display_name": account.get("display_name"),
                     "account_identity": account.get("account_identity"),
                     "state": state,
+                    "raw_state": raw_state,
                     "reason": reason,
                     "basis": basis,
                     "observed_state": observed,
                     "stored_state": stored,
                     "next_action": next_action_for(state),
-                    "permission_state": account.get("permission_state"),
+                    "permission_state": permission,
                     "last_success_at": account.get("last_success_at"),
                     "freshness": human_age(account.get("last_success_at")),
                     "origin": account.get("origin"),
@@ -759,23 +826,25 @@ class _AppMixin:
             if not conditions:
                 continue
             for capability in account.get("capabilities", []):
-                if capability.get("supported") and capability.get("state") in healthy:
+                cap_state = capability.get("state")
+                if capability.get("supported") and cap_state in Ingest.HEALTHY_OBSERVED_STATES:
                     # A capability the source declares supported and this run observed healthy
-                    # is not a condition the owner must act on. The old guard compared against
-                    # the bare literal "ok" -- a value no probe row ever emits (probe rows use
-                    # the adapter outcome codes) -- so it skipped the seeded rows by accident
-                    # and would have reported every real probe row. It now uses the same
-                    # healthy-vocabulary as the source check above.
+                    # is not a condition the owner must act on. A capability's ``state`` is an
+                    # observed outcome code (``ok``/``success``), so it is matched against the
+                    # observed-code vocabulary -- not the source-state one, which is a
+                    # different language and made every healthy row read as a condition.
                     continue
+                state = condition_state(cap_state)
                 out.append({
                     "kind": "capability",
                     "adapter": account.get("adapter"),
                     "account_id": account.get("account_id"),
                     "display_name": account.get("display_name"),
                     "capability": capability.get("name"),
-                    "state": capability.get("state"),
-                    "reason": capability.get("limitation") or f"capability is {capability.get('state')}",
-                    "next_action": next_action_for(capability.get("state")),
+                    "state": state,
+                    "raw_state": cap_state,
+                    "reason": capability.get("limitation") or f"capability is {cap_state}",
+                    "next_action": next_action_for(state),
                     "probe_method": capability.get("probe_method"),
                     "probe_assertion": capability.get("probe_assertion"),
                     "observed_version": capability.get("observed_version"),

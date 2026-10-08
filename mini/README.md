@@ -48,8 +48,12 @@ Apple moves these panes between releases.*
 
 Two things to know before granting anything:
 
-* Run the probe **first**. It is read-only, it creates nothing, and its output is what Gate 2
-  records as evidence. A denied permission is a perfectly good answer.
+* Run the probe **first**. Its output is what Gate 2 records as evidence, and a denied
+  permission is a perfectly good answer. It changes nothing in Mail: no read flag, no move, no
+  delete, no composer, no draft, no file. It is **not** inert, though — the `health` row asks the
+  Apple event system about Mail.app, and on a Mac where Mail is not running that call is what can
+  **launch Mail.app**. Whether `application "Mail" is running` answers without launching it is
+  one of the things the probe measures on your Mac, not something this repository can settle.
 * This worker never asks for Full Disk Access, never touches Mail's private databases
   (`Envelope Index`, `.emlx`) and never writes to Mail. If Mail's AppleScript terminology
   turns out to be insufficient for something, the row says `unsupported` — that is the
@@ -84,10 +88,18 @@ One JSON object per line, one line per capability — the PRD §11 manifest cont
 | `probe_assertion` | what `supported: true` claims was observed |
 | `limitation` | what is known not to hold, or why the row is unsupported |
 | `evidence` | what was actually observed |
-| `state` | the typed outcome of this capability: `success`, `partial`, `unsupported`, `permission_denied`, `offline`, `rate_limited`, `retryable_error`, `permanent_error` |
-| `origin` | `real` **only** when this run produced the row on this host. `fixture` means a recorded result in this repository |
+| `state` | the typed outcome of this capability: `success`, `partial`, `unsupported`, `permission_denied`, `offline`, `rate_limited`, `retryable_error`, `permanent_error`, `outcome_unknown` — or `unmeasured`, meaning the capability's own assertion was never evaluated (a documentation read, a single-page mailbox, a message with no attachments) |
+| `origin` | `real` **only** when this run produced the row on this host; `fixture` means a recorded scenario in this repository; `documentation` means a page read from the Gate 2 probe pack and nothing was contacted |
+| `title` | the capability in words, for the review surfaces |
+| `source` | which product the capability belongs to (`mail`, `beeper`, `contacts`, `hermes`) |
+| `citations` | the probe-pack records behind a `documentation` row (`O01`–`O22`); empty on every measured row |
+| `probed_at` | when this row was produced |
+| `probe_contract_version` | the row contract this row was written against |
+| `observed_version_reason` | why `observed_version` is `not_observed`, when it is |
 | `values_from_source` | true only when the capability answered with data (success/partial) rather than a typed refusal |
-| `label` / `disclaimer` | present whenever `origin` is not `real` |
+| `adapter_is_real` | which adapter answered: the real one (`true`) or its fixture twin (`false`) |
+| `real_source_connected` | whether a real source was contacted and the value came from it. `false` on every command on any host that did not read a source |
+| `label` / `disclaimer` | present whenever `origin` is not `real`: `FIXTURE:` for a recorded scenario, `DOCUMENTATION:<source>(O##)` for a page read |
 
 `supported` says the capability exists; `state` says what this probe saw. A row can be
 `supported: true` with `state: offline` — Mail is installed but not running.
@@ -217,10 +229,16 @@ AppleScript in `switchboard_mini/mail_transport.py`, one script per operation, r
 python3 -m unittest discover -s tests -t .        # from the repository root
 ```
 
-The Mini tests are `tests/test_mini_probe.py` and `tests/test_mini_mail.py`; they run entirely
-off the recorded fixtures on any platform, and assert the fixture labelling, the typed failure
-states, the row contract, cursor resumption, partial-history reporting, the retrieval-miss
-distinction, and that every mutating operation is `unsupported`.
+The whole suite is **255 tests** in a fresh checkout; the number to trust is whatever that
+command prints, so run it rather than believing this line. The Mini tests are
+`tests/test_mini_probe.py` (the row contract, the typed states, the labelling of every row by
+what it actually contacted, and the citations), `tests/test_mini_mail.py` (the Mail adapter
+against the four recorded scenarios) and `tests/test_mini_cli.py` (every command, in both
+modes, as a real process). `tests/test_probe_import.py` drives Grace's side: a probe run
+imports row by row, and one over-claiming row refuses the whole import. The Mini tests run
+entirely off recorded fixtures on any platform and assert the fixture labelling, the typed
+failure states, cursor resumption, partial-history reporting, the retrieval-miss distinction,
+and that every mutating operation is `unsupported`.
 
 ## Recovery notes
 
