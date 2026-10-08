@@ -24,6 +24,7 @@ Invariants this module exists to hold:
 from __future__ import annotations
 
 import json
+import sqlite3
 from typing import Any, Iterable, Optional
 
 from . import contracts as C
@@ -164,6 +165,20 @@ class Effects:
             version = int(self.store.scalar(
                 "SELECT COALESCE(MAX(version), 0) + 1 FROM draft WHERE ws_conv_id = ? "
                 "AND COALESCE(job_id,'') = COALESCE(?, '')", (ws_conv_id, job_id)) or 1)
+        # (ws_conv_id, job_id, version) is the draft's version scope. The schema enforces it
+        # with an expression index over COALESCE(job_id, '') because SQLite treats every NULL
+        # as distinct, so the plain UNIQUE constraint did nothing when job_id was NULL. This
+        # check turns that enforcement into a typed outcome instead of an IntegrityError.
+        existing = self.store.one(
+            "SELECT * FROM draft WHERE ws_conv_id = ? AND COALESCE(job_id,'') = COALESCE(?,'') "
+            "AND version = ?", (ws_conv_id, job_id, version))
+        if existing is not None:
+            return OpResult(C.IDEMPOTENT_REPLAY,
+                            f"draft v{version} already exists in this (conversation, job) "
+                            "scope; reusing it rather than creating a second version",
+                            data=self.draft_view(existing["draft_id"]),
+                            provenance=existing["origin"], label=existing["mock_label"],
+                            mocked=(existing["origin"] == C.MOCK))
         content_hash = C.sha256_hex({
             "account_id": conv["account_id"], "channel": conv["adapter"],
             "destination_conv_id": destination_conv_id, "mode": mode, "subject": subject,
@@ -173,7 +188,7 @@ class Effects:
         draft_id = C.new_id("draft")
         now = C.now()
         with self.store.tx():
-            self.store.insert_row("draft", {
+            if not self.store.try_insert_row("draft", {
                 "draft_id": draft_id, "ws_conv_id": ws_conv_id, "job_id": job_id,
                 "version": version, "parent_version": None, "immutable": 1,
                 "account_id": conv["account_id"], "channel": conv["adapter"],
@@ -188,7 +203,12 @@ class Effects:
                 "author": author, "superseded_by": None, "invalidated_at": None,
                 "invalidation_reason": None, "blocking_limitations": blocking_limitations,
                 "created_at": now, "origin": origin, "mock_label": mock_label,
-            })
+            }):
+                # Another writer took this version first: the schema refused the second row,
+                # so this is a typed conflict, not an exception.
+                return OpResult(C.CONFLICT,
+                                f"draft v{version} was just taken in this (conversation, job) "
+                                "scope; re-read the drafts before writing a new version")
             for i, ref in enumerate(refs, start=1):
                 ref_id = ref.get("attachment_ref_id")
                 if ref_id and self.store.one(

@@ -449,6 +449,148 @@ class Ingest:
     #: Coverage states that mean "this ledger view is as complete as the source allowed".
     COMPLETE_COVERAGE_STATES = ("current", "fixture", "fixture_scan", "verified_scan")
 
+    # ---------------------------------------------------------------------------
+    # Source health is three separate axes, not one blended value. Transport asks "can
+    # this source be reached at all?", freshness asks "when was it last observed?", and
+    # coverage asks "is this history complete, and if not, why not?" (PRD §6 "Health
+    # presentation", §13, R09, T09/T10/T20). Each axis reports its own typed state, its
+    # own reason and its own basis, and an axis whose value is unknown says ``unknown``
+    # rather than borrowing the good news from another axis. The state last written to
+    # the ledger stays a separate, labelled axis of its own (see ``health_state_basis``).
+    # ---------------------------------------------------------------------------
+    AXES = ("transport", "freshness", "coverage")
+
+    #: The probe outcome -> the transport axis state.
+    TRANSPORT_STATES = {
+        "success": "connected", "ok": "connected", "current": "connected",
+        "connected": "connected", "syncing": "connected", "partial": "partial",
+        "unsupported": "unsupported", "permission_denied": "permission_denied",
+        "offline": "offline", "rate_limited": "rate_limited",
+        "retryable_error": "error", "permanent_error": "error",
+        "outcome_unknown": "outcome_unknown", "token_reset": "error",
+    }
+    TRANSPORT_SEVERITY = {
+        "connected": "ok", "partial": "warn", "unsupported": "warn",
+        "rate_limited": "warn", "outcome_unknown": "warn",
+        "permission_denied": "danger", "offline": "danger", "error": "danger",
+        "unknown": "unknown",
+    }
+    #: The states that make each axis positively healthy. Nothing else is ever green, and
+    #: `unknown` is not in any of these lists.
+    AXIS_HEALTHY = {
+        "transport": ("connected",),
+        "freshness": ("observed_now",),
+        "coverage": ("complete",),
+    }
+
+    @classmethod
+    def _axis(cls, name: str, state: str, reason: str, basis: str, *, severity: str,
+              **extra: Any) -> dict:
+        axis = {
+            "axis": name,
+            "state": state,
+            "severity": severity,
+            "green": state in cls.AXIS_HEALTHY[name],
+            "reason": reason,
+            "basis": basis,
+        }
+        axis.update(extra)
+        return axis
+
+    def _transport_axis(self, sample: dict, account: dict) -> dict:
+        """Can the source be reached at all? Answered by this run's typed probe outcome."""
+        code = (sample or {}).get("code")
+        state = self.TRANSPORT_STATES.get(code or "", "unknown")
+        basis = ("observed just now: the adapter's own health probe of this run "
+                 f"(outcome {code!r})" if code else
+                 "unknown: no health probe ran for this account in this deployment")
+        if state == "unknown":
+            reason = (account.get("health_detail") or
+                      "the source's reachability was not observed in this run, so it is "
+                      "reported as unknown rather than assumed healthy")
+        else:
+            reason = (sample.get("detail") or
+                      f"the adapter answered {code!r} for this account")
+        return self._axis("transport", state, reason, basis,
+                          severity=self.TRANSPORT_SEVERITY[state],
+                          probe_outcome=code, probe_at=sample.get("observed_at"),
+                          stored_health_state=account.get("health_state"),
+                          stored_health_detail=account.get("health_detail"),
+                          permission_state=account.get("permission_state"))
+
+    def _freshness_axis(self, sample: dict, account: dict) -> dict:
+        """When was this source last observed? A missing observation is unknown, not fresh."""
+        last = account.get("last_success_at")
+        probed_ok = bool(sample) and sample.get("code") in self.HEALTHY_OBSERVED_STATES
+        if not last:
+            state, severity = "unknown", "unknown"
+            reason = ("no successful read of this account has ever been recorded in this "
+                      "deployment, so its freshness is unknown"
+                      + ("; this run's health probe did answer, but that is not a read "
+                         "observation" if probed_ok else ""))
+        elif probed_ok:
+            state, severity = "observed_now", "ok"
+            reason = (f"last observed successfully at {last}, and the source answered this "
+                      "run's health probe")
+        else:
+            state, severity = "observed", "warn"
+            reason = (f"last observed successfully at {last}; the source did not confirm a "
+                      "healthy answer to this run's probe, so this is a recorded past "
+                      "observation rather than a current one")
+        seconds = None
+        if last:
+            seconds = max(0, int((C.now_dt() - C.parse_iso(last)).total_seconds()))
+        return self._axis("freshness", state, reason,
+                          "the account's own last_success_at plus this run's probe",
+                          severity=severity, last_success_at=last, last_probe_at=account.get("last_probe_at"),
+                          age_seconds=seconds, probe_observed=bool(sample))
+
+    def _coverage_axis(self, account: dict, checkpoints: list[dict], declared: dict,
+                       sample: dict) -> dict:
+        """Is the history read complete, partial or unproven? Never 'complete' by default."""
+        declared_state = declared.get("coverage_state")
+        gap_reason = declared.get("gap_reason")
+        partial = [c for c in checkpoints
+                   if c.get("coverage_state") and c["coverage_state"] not in self.COMPLETE_COVERAGE_STATES]
+        if not gap_reason and partial:
+            gap_reason = partial[0].get("gap_reason") or (
+                f"the checkpoint records coverage_state={partial[0].get('coverage_state')!r}")
+        scopes = [f"{c.get('scope')}:{c.get('scope_ref')}" for c in checkpoints]
+        if declared_state and declared_state not in self.COMPLETE_COVERAGE_STATES:
+            state, severity = "partial_history", "warn"
+            reason = ("the adapter declares this account's coverage to be partial: "
+                      + (gap_reason or declared_state))
+        elif partial:
+            state, severity = "partial_history", "warn"
+            reason = ("a recorded checkpoint shows this account's history is partial: "
+                      + (gap_reason or "see the checkpoint's gap reason"))
+        elif checkpoints:
+            state, severity = "complete", "ok"
+            reason = ("every recorded checkpoint for this account reports a complete bounded "
+                      f"scan of its scope ({', '.join(scopes) or 'no scope recorded'})")
+        else:
+            state, severity = "unknown", "unknown"
+            reason = ("no sync checkpoint has ever been recorded for this account, so the "
+                      "completeness of its history is unproven — partial history is not an "
+                      "empty result (PRD §6)")
+            gap_reason = gap_reason or reason
+        return self._axis("coverage", state, reason,
+                          "this deployment's own sync checkpoints for the account"
+                          + (" plus the adapter's coverage declaration" if declared else ""),
+                          severity=severity, gap_reason=gap_reason, scopes=scopes,
+                          checkpoint_count=len(checkpoints),
+                          declared_coverage_state=declared_state,
+                          declared_limitation=declared.get("limitation"))
+
+    def health_axes(self, account: dict, sample: dict, checkpoints: list[dict]) -> dict:
+        """The three axes for one account, computed from three different sources of truth."""
+        declared = self._coverage_declaration(account)
+        return {
+            "transport": self._transport_axis(sample, account),
+            "freshness": self._freshness_axis(sample, account),
+            "coverage": self._coverage_axis(account, checkpoints, declared, sample),
+        }
+
     def observe_sources(self) -> dict[str, dict]:
         """Ask every account's adapter what its state is *now*, keyed by account id.
 
@@ -591,6 +733,14 @@ class Ingest:
             row["observed_health_state"] = sample.get("code")
             row["observed_at"] = sample.get("observed_at")
             row["observed_label"] = sample.get("label")
+            # Three axes, three sources of truth: the live probe (transport), the account's
+            # own last observation (freshness) and this deployment's checkpoints plus the
+            # adapter's declaration (coverage). None of them borrows another's good news.
+            checkpoints = self.store.all(
+                "SELECT scope, scope_ref, coverage_state, gap_reason, coverage_json, "
+                "last_success_at, oldest_observed_time FROM sync_checkpoint WHERE account_id = ? "
+                "ORDER BY scope, scope_ref", (row["account_id"],))
+            row["health_axes"] = self.health_axes(row, sample, checkpoints)
             if sample and sample["code"] not in self.HEALTHY_OBSERVED_STATES:
                 # The observed failure replaces the stored state: what is true now wins over
                 # what was last written.

@@ -386,6 +386,64 @@ class QueueState:
     ALL = (NEEDS_ME, WORKING, IDLE)
 
 
+# --------------------------------------------------------- derived job state ---
+
+#: job_state -> (queue_state, review_state, needs_me_reason).
+#:
+#: This is the single, pure derivation of the triage filter state from the lifecycle
+#: state. It is applied **per job** (``job.queue_state`` and friends) and never per
+#: conversation directly: a conversation's own state is the aggregate of its jobs
+#: (``ledger._recompute_workspace_state``), so two jobs in one conversation cannot
+#: overwrite each other's state (PRD §5 independent states, §12; T04/T05/T12).
+JOB_FILTER_STATES: dict[str, tuple[str, str, "Optional[str]"]] = {
+    JobState.QUEUED: (QueueState.WORKING, ReviewState.NONE, None),
+    JobState.RUNNING: (QueueState.WORKING, ReviewState.NONE, None),
+    JobState.WAITING_FOR_SOURCE: (QueueState.WORKING, ReviewState.NONE, "waiting_for_source"),
+    JobState.WAITING_FOR_USER: (QueueState.NEEDS_ME, ReviewState.AWAITING_INPUT, "question"),
+    JobState.WAITING_FOR_APPROVAL: (QueueState.NEEDS_ME, ReviewState.AWAITING_APPROVAL,
+                                    "approval"),
+    JobState.READY_FOR_REVIEW: (QueueState.NEEDS_ME, ReviewState.AWAITING_REVIEW, "draft"),
+    JobState.SUCCEEDED: (QueueState.IDLE, ReviewState.NONE, None),
+    JobState.FAILED: (QueueState.NEEDS_ME, ReviewState.BLOCKED, "failure"),
+    JobState.CANCELLED: (QueueState.IDLE, ReviewState.NONE, "cancelled"),
+    JobState.SUPERSEDED: (QueueState.IDLE, ReviewState.NONE, "superseded"),
+}
+
+#: Which needs-me reason wins when one conversation carries several of them. Most urgent
+#: first: an uncertain side effect or a failure must never be hidden behind a draft.
+NEEDS_ME_REASON_PRIORITY: tuple[str, ...] = (
+    "untriaged_message", "uncertain_effect", "failure", "blocked", "approval",
+    "question", "draft", "waiting_for_source", "cancelled", "superseded",
+)
+
+
+def most_urgent_reason(reasons: "Iterable[str]") -> Optional[str]:
+    """The most urgent of several needs-me reasons, or None when there is none."""
+    present = [r for r in NEEDS_ME_REASON_PRIORITY if r in set(reasons)]
+    if present:
+        return present[0]
+    remaining = sorted({r for r in reasons if r})
+    return remaining[0] if remaining else None
+
+
+class ArchiveState:
+    """Archive is a state, not a delete (PRD §8, §12)."""
+
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+    ALL = (ACTIVE, ARCHIVED)
+
+
+class DeletionState:
+    """Application tombstone. Deleting here never removes a source row (R08)."""
+
+    RETAINED = "retained"
+    DELETED = "deleted"
+
+    ALL = (RETAINED, DELETED)
+
+
 class ErrorCategory:
     """Classified failure reason recorded on effect attempts (PRD §13)."""
 

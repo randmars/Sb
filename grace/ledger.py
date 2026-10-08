@@ -28,6 +28,18 @@ def _job_brief(job: dict, ws: dict | None = None) -> dict:
         "ws_conv_id": job["ws_conv_id"],
         "agent": job["agent"],
         "job_state": job["job_state"],
+        # The triage/review state is the JOB's own, not the conversation's: two jobs in one
+        # conversation each keep their own (PRD §5, §12).
+        "queue_state": job.get("queue_state"),
+        "review_state": job.get("review_state"),
+        "needs_me_reason": job.get("needs_me_reason"),
+        "archive_state": C.ArchiveState.ARCHIVED if job.get("archived_at")
+                         else C.ArchiveState.ACTIVE,
+        "archived_at": job.get("archived_at"),
+        "archive_reason": job.get("archive_reason"),
+        "deletion_state": C.DeletionState.DELETED if job.get("deleted_at")
+                          else C.DeletionState.RETAINED,
+        "deleted_at": job.get("deleted_at"),
         "state_version": job["state_version"],
         "attempt_count": job["attempt_count"],
         "instruction": job["instruction"],
@@ -100,6 +112,9 @@ class Ledger:
             self.store.insert_row("job", {
                 "job_id": job_id, "ws_conv_id": ws_conv_id, "instruction_version": 1,
                 "instruction": instruction, "agent": agent, "job_state": JobState.QUEUED,
+                # A job starts working, and it carries its own triage state from the start.
+                "queue_state": QueueState.WORKING, "review_state": ReviewState.NONE,
+                "needs_me_reason": None,
                 "state_version": 1, "capability_plan": C.canonical_json(capability_plan or {
                     "systems": [], "target": None, "requested_effect": "prepare_draft",
                     "authorization": "owner_instruction", "verification": "application_receipt",
@@ -190,7 +205,7 @@ class Ledger:
                 "resulting_version": job["state_version"] + 1,
                 "details_json": C.canonical_json(details or {}),
             })
-            self._sync_workspace_for_job(job["ws_conv_id"], to_state, now)
+            self._sync_workspace_for_job(job["ws_conv_id"], to_state, now, job_id=job_id)
             self.store.audit(actor=actor, operation=f"job:{to_state}", entity_kind="job",
                             entity_id=job_id, reason=reason,
                             version_before=job["state_version"],
@@ -200,26 +215,25 @@ class Ledger:
                         data={"job_id": job_id, "job_state": to_state},
                         current_version=job["state_version"] + 1, operation_id=operation_id)
 
-    def _sync_workspace_for_job(self, ws_conv_id: str, job_state: str, at: str) -> None:
-        """Derive the review/queue filter state from job state, leaving source state alone."""
-        mapping = {
-            JobState.QUEUED: (QueueState.WORKING, ReviewState.NONE, None),
-            JobState.RUNNING: (QueueState.WORKING, ReviewState.NONE, None),
-            JobState.WAITING_FOR_SOURCE: (QueueState.WORKING, ReviewState.NONE, "waiting_for_source"),
-            JobState.WAITING_FOR_USER: (QueueState.NEEDS_ME, ReviewState.AWAITING_INPUT, "question"),
-            JobState.WAITING_FOR_APPROVAL: (QueueState.NEEDS_ME, ReviewState.AWAITING_APPROVAL,
-                                            "approval"),
-            JobState.READY_FOR_REVIEW: (QueueState.NEEDS_ME, ReviewState.AWAITING_REVIEW, "draft"),
-            JobState.SUCCEEDED: (QueueState.IDLE, ReviewState.NONE, None),
-            JobState.FAILED: (QueueState.NEEDS_ME, ReviewState.BLOCKED, "failure"),
-            JobState.CANCELLED: (QueueState.IDLE, ReviewState.NONE, "cancelled"),
-            JobState.SUPERSEDED: (QueueState.IDLE, ReviewState.NONE, "superseded"),
-        }
-        queue_state, review_state, reason = mapping[job_state]
-        self.store.update_row("workspace_conversation", {
-            "queue_state": queue_state, "review_state": review_state,
-            "needs_me_reason": reason, "updated_at": at,
-        }, "ws_conv_id = ?", (ws_conv_id,))
+    def _sync_workspace_for_job(self, ws_conv_id: str, job_state: str, at: str,
+                               job_id: str | None = None) -> None:
+        """Derive the triage filter state from job state — per JOB, then aggregate.
+
+        PRD §5 keeps the queue filter an application-owned state that is independent of the
+        source message. Deriving it per *conversation* was the Gate 1 defect: a second job
+        in the same conversation overwrote the first job's queue/review/reason, so one job's
+        draft vanished from Needs me and from the client. Now the job carries its own state
+        (:data:`contracts.JOB_FILTER_STATES`) and the conversation shows the aggregate of the
+        jobs it hosts.
+        """
+        queue_state, review_state, reason = C.JOB_FILTER_STATES[job_state]
+        if job_id:
+            self.store.update_row("job", {
+                "queue_state": queue_state, "review_state": review_state,
+                "needs_me_reason": reason, "updated_at": at,
+            }, "job_id = ?", (job_id,))
+        self.store.recompute_conversation_filter_state(ws_conv_id, at=at)
+
 
     # ------------------------------------------------------------------ leases --
     def claim(self, job_id: str, *, worker: str, lease_seconds: int = 30,
@@ -241,6 +255,11 @@ class Ledger:
                 "job_state": JobState.RUNNING, "state_version": job["state_version"] + 1,
                 "attempt_count": attempt_no, "lease_owner": worker,
                 "lease_expires_at": C.plus(lease_seconds), "lease_heartbeat_at": now,
+                # Claiming moves THIS job into the working filter; it must not overwrite
+                # another job's needs-me state in the same conversation.
+                "queue_state": C.JOB_FILTER_STATES[JobState.RUNNING][0],
+                "review_state": C.JOB_FILTER_STATES[JobState.RUNNING][1],
+                "needs_me_reason": C.JOB_FILTER_STATES[JobState.RUNNING][2],
                 "updated_at": now,
             }, "job_id = ?", (job_id,))
             self.store.insert_row("attempt", {
@@ -257,10 +276,7 @@ class Ledger:
                 "resulting_version": job["state_version"] + 1,
                 "details_json": C.canonical_json({"lease_seconds": lease_seconds}),
             })
-            self.store.update_row("workspace_conversation", {
-                "queue_state": QueueState.WORKING, "review_state": ReviewState.NONE,
-                "needs_me_reason": None, "updated_at": now,
-            }, "ws_conv_id = ?", (job["ws_conv_id"],))
+            self.store.recompute_conversation_filter_state(job["ws_conv_id"], at=now)
         return OpResult(C.OK, "claimed", data={"job_id": job_id, "attempt_no": attempt_no,
                                               "lease_expires_at": C.plus(lease_seconds)})
 
@@ -300,8 +316,13 @@ class Ledger:
                     "job_state": JobState.QUEUED, "state_version": job["state_version"] + 1,
                     "lease_owner": None, "lease_expires_at": None,
                     "stall_count": job["stall_count"] + 1, "last_stall_at": now,
+                    # The job returns to the recoverable queue state, and only THIS job.
+                    "queue_state": C.JOB_FILTER_STATES[JobState.QUEUED][0],
+                    "review_state": C.JOB_FILTER_STATES[JobState.QUEUED][1],
+                    "needs_me_reason": C.JOB_FILTER_STATES[JobState.QUEUED][2],
                     "updated_at": now,
                 }, "job_id = ?", (job_id,))
+                self.store.recompute_conversation_filter_state(job["ws_conv_id"], at=now)
                 self.store.insert_row("job_transition", {
                     "transition_id": C.new_id("tr"), "job_id": job_id,
                     "from_state": JobState.RUNNING, "to_state": JobState.QUEUED,
@@ -474,33 +495,118 @@ class Ledger:
                         data={"published": [r["outbox_id"] for r in rows]})
 
     # ------------------------------------------------------------------ views ---
-    def needs_me(self, limit: int = 50) -> list[dict]:
+    #: A work item is only on a surface while it is live: an archived or deleted job, or a
+    #: job inside an archived or deleted conversation, is out of the default triage
+    #: surfaces. Nothing is removed from storage to achieve that.
+    LIVE_JOB = "j.archived_at IS NULL AND j.deleted_at IS NULL"
+    LIVE_WS = "w.archived_at IS NULL AND w.deleted_at IS NULL"
+
+    #: What an archived (or deleted) item is, stated once, for every surface.
+    RETENTION_NOTE = (
+        "Archived: out of the default triage surfaces, still stored and directly "
+        "retrievable. Archive is not deletion — no source conversation, message, job, draft "
+        "or result row is removed. A deleted item is an application tombstone: also still in "
+        "storage, listed only when explicitly asked for, and never a source-app deletion.")
+
+    def _work_items(self, state: str, limit: int) -> list[dict]:
+        """One item per JOB in that filter state, plus conversations with no live job.
+
+        A conversation may carry several concurrent jobs (`T04`): each is its own item with
+        its own state, so a second job can no longer overwrite the first one's.
+        """
         rows = self.store.all(
-            "SELECT * FROM workspace_conversation WHERE queue_state = ? "
-            "ORDER BY updated_at DESC LIMIT ?", (QueueState.NEEDS_ME, limit))
-        return [self._ws_brief(r) for r in rows]
+            f"SELECT j.job_id, j.ws_conv_id FROM job j JOIN workspace_conversation w "
+            f"ON w.ws_conv_id = j.ws_conv_id "
+            f"WHERE j.queue_state = ? AND {self.LIVE_JOB} AND {self.LIVE_WS} "
+            f"ORDER BY w.updated_at DESC, j.created_at DESC LIMIT ?", (state, limit))
+        items: list[dict] = []
+        for row in rows:
+            ws = self.store.one("SELECT * FROM workspace_conversation WHERE ws_conv_id = ?",
+                                (row["ws_conv_id"],))
+            job = self.store.one("SELECT * FROM job WHERE job_id = ?", (row["job_id"],))
+            items.append(self._work_item_brief(ws, job))
+        covered = {item["ws_conv_id"] for item in items}
+        for ws in self.store.all(
+                f"SELECT * FROM workspace_conversation w WHERE w.queue_state = ? AND {self.LIVE_WS} "
+                f"ORDER BY w.updated_at DESC LIMIT ?", (state, limit)):
+            if ws["ws_conv_id"] in covered:
+                continue
+            if self.store.scalar(
+                    f"SELECT COUNT(*) FROM job j WHERE j.ws_conv_id = ? AND {self.LIVE_JOB}",
+                    (ws["ws_conv_id"],)):
+                # The conversation has live jobs of its own; they are listed individually
+                # and the conversation row's state is only their aggregate.
+                continue
+            items.append(self._work_item_brief(ws, None))
+        return items[:limit]
+
+    def _work_item_brief(self, ws: dict, job: dict | None) -> dict:
+        """A conversation brief carrying THIS work item's own state."""
+        brief = self._ws_brief(ws)
+        brief["job_id"] = job["job_id"] if job else None
+        brief["work_item_id"] = (f"{ws['ws_conv_id']}::{job['job_id']}" if job
+                                 else f"{ws['ws_conv_id']}::conversation")
+        brief["job"] = _job_brief(job, ws) if job else None
+        if job is not None:
+            brief["queue_state"] = job["queue_state"]
+            brief["review_state"] = job["review_state"]
+            brief["needs_me_reason"] = job["needs_me_reason"]
+        return brief
+
+    def needs_me(self, limit: int = 50) -> list[dict]:
+        return self._work_items(QueueState.NEEDS_ME, limit)
 
     def working(self, limit: int = 50) -> list[dict]:
-        rows = self.store.all(
-            "SELECT * FROM workspace_conversation WHERE queue_state = ? "
-            "ORDER BY updated_at DESC LIMIT ?", (QueueState.WORKING, limit))
-        return [self._ws_brief(r) for r in rows]
+        return self._work_items(QueueState.WORKING, limit)
 
-    def all_conversations(self, limit: int = 100) -> list[dict]:
-        rows = self.store.all("SELECT * FROM workspace_conversation "
-                              "ORDER BY updated_at DESC LIMIT ?", (limit,))
-        return [self._ws_brief(r) for r in rows]
+    def all_conversations(self, limit: int = 100, *, include_deleted: bool = False) -> list[dict]:
+        sql = ("SELECT * FROM workspace_conversation "
+               + ("" if include_deleted else "WHERE deleted_at IS NULL ")
+               + "ORDER BY updated_at DESC LIMIT ?")
+        return [self._ws_brief(r) for r in self.store.all(sql, (limit,))]
 
     def counts(self) -> dict:
+        """Independent counts (PRD §5): work items for the two queues, conversations for `all`.
+
+        needs_me/working count *items*, because that is what those surfaces list; `all`
+        counts conversations, because that is what it lists. Each is computed on its own.
+        """
+        needs_me_jobs = self.store.scalar(
+            f"SELECT COUNT(*) FROM job j JOIN workspace_conversation w "
+            f"ON w.ws_conv_id = j.ws_conv_id WHERE j.queue_state = ? AND {self.LIVE_JOB} "
+            f"AND {self.LIVE_WS}", (QueueState.NEEDS_ME,))
+        needs_me_conversations = self.store.scalar(
+            f"SELECT COUNT(*) FROM workspace_conversation w WHERE w.queue_state = ? "
+            f"AND {self.LIVE_WS} AND NOT EXISTS (SELECT 1 FROM job j WHERE "
+            f"j.ws_conv_id = w.ws_conv_id AND {self.LIVE_JOB})", (QueueState.NEEDS_ME,))
+        working_jobs = self.store.scalar(
+            f"SELECT COUNT(*) FROM job j JOIN workspace_conversation w "
+            f"ON w.ws_conv_id = j.ws_conv_id WHERE j.queue_state = ? AND {self.LIVE_JOB} "
+            f"AND {self.LIVE_WS}", (QueueState.WORKING,))
+        working_conversations = self.store.scalar(
+            f"SELECT COUNT(*) FROM workspace_conversation w WHERE w.queue_state = ? "
+            f"AND {self.LIVE_WS} AND NOT EXISTS (SELECT 1 FROM job j WHERE "
+            f"j.ws_conv_id = w.ws_conv_id AND {self.LIVE_JOB})", (QueueState.WORKING,))
         return {
-            "needs_me": self.store.scalar("SELECT COUNT(*) FROM workspace_conversation WHERE queue_state=?",
-                                          (QueueState.NEEDS_ME,)),
-            "working": self.store.scalar("SELECT COUNT(*) FROM workspace_conversation WHERE queue_state=?",
-                                         (QueueState.WORKING,)),
-            "all": self.store.scalar("SELECT COUNT(*) FROM workspace_conversation"),
+            "needs_me": needs_me_jobs + needs_me_conversations,
+            "working": working_jobs + working_conversations,
+            "all": self.store.scalar("SELECT COUNT(*) FROM workspace_conversation "
+                                     "WHERE deleted_at IS NULL"),
             "stalled_jobs": len(self.store.all(
                 "SELECT job_id FROM job WHERE job_state = ? AND lease_expires_at IS NOT NULL "
                 "AND lease_expires_at < ?", (JobState.RUNNING, C.now()))),
+        }
+
+    def archived_count(self) -> dict:
+        """Archived items are counted separately; they are outside the triage totals."""
+        return {
+            "conversations": self.store.scalar(
+                "SELECT COUNT(*) FROM workspace_conversation WHERE archived_at IS NOT NULL "
+                "AND deleted_at IS NULL"),
+            "jobs": self.store.scalar(
+                "SELECT COUNT(*) FROM job WHERE archived_at IS NOT NULL AND deleted_at IS NULL"),
+            "deleted_conversations": self.store.scalar(
+                "SELECT COUNT(*) FROM workspace_conversation WHERE deleted_at IS NOT NULL"),
         }
 
     def _ws_brief(self, ws: dict) -> dict:
@@ -530,12 +636,23 @@ class Ledger:
             "review_state": ws["review_state"],
             "assignment_state": ws["assignment_state"],
             "needs_me_reason": ws["needs_me_reason"],
+            # Archive is a state, not a delete: both facts travel together everywhere so a
+            # reader can never mistake one for the other.
+            "archive_state": C.ArchiveState.ARCHIVED if ws["archived_at"]
+                             else C.ArchiveState.ACTIVE,
+            "archived_at": ws["archived_at"],
+            "archive_reason": ws["archive_reason"],
+            "deletion_state": C.DeletionState.DELETED if ws["deleted_at"]
+                              else C.DeletionState.RETAINED,
+            "deleted_at": ws["deleted_at"],
+            "deletion_reason": ws["deletion_reason"],
             "current_input_revision": ws["current_input_revision"],
             "updated_at": ws["updated_at"],
             "source_links": sources,
             "latest_message": latest,
             "jobs": [_job_brief(j, ws) for j in jobs],
         }
+
 
     def job_detail(self, job_id: str) -> Optional[dict]:
         job = self.store.one("SELECT * FROM job WHERE job_id = ?", (job_id,))
@@ -567,7 +684,96 @@ class Ledger:
                 "SELECT * FROM session_binding WHERE job_id = ?", (job_id,)),
         }
 
+    # ------------------------------------------------------- archive / delete --
+    def archive_item(self, *, ws_conv_id: str | None = None, job_id: str | None = None,
+                     reason: str = "", actor: str = "owner") -> OpResult:
+        """Archive a conversation or one job: out of triage, still stored. Not a delete."""
+        return self._retention_op(ws_conv_id=ws_conv_id, job_id=job_id, archive=True,
+                                  reason=reason, actor=actor, operation="archive_item")
+
+    def unarchive_item(self, *, ws_conv_id: str | None = None, job_id: str | None = None,
+                       reason: str = "", actor: str = "owner") -> OpResult:
+        return self._retention_op(ws_conv_id=ws_conv_id, job_id=job_id, archive=False,
+                                  reason=reason, actor=actor, operation="unarchive_item")
+
+    def delete_item(self, *, ws_conv_id: str | None = None, job_id: str | None = None,
+                    reason: str = "", actor: str = "owner") -> OpResult:
+        """Tombstone an item. It leaves every list, but no source row is removed (R08)."""
+        return self._retention_op(ws_conv_id=ws_conv_id, job_id=job_id, delete=True,
+                                  reason=reason, actor=actor, operation="delete_item")
+
+    def restore_item(self, *, ws_conv_id: str | None = None, job_id: str | None = None,
+                     reason: str = "", actor: str = "owner") -> OpResult:
+        return self._retention_op(ws_conv_id=ws_conv_id, job_id=job_id, delete=False,
+                                  reason=reason, actor=actor, operation="restore_item")
+
+    def _retention_op(self, *, ws_conv_id: str | None, job_id: str | None,
+                      archive: bool | None = None, delete: bool | None = None,
+                      reason: str, actor: str, operation: str) -> OpResult:
+        """Archive/delete/restore one conversation or one job.
+
+        Archive and deletion are *states* in the ledger, never a row removal: the source
+        stays authoritative in its own app (PRD §8, R08), and a deleted item is an
+        application tombstone that stays in storage and stays retrievable by identity.
+        """
+        if ws_conv_id and job_id:
+            return OpResult(C.INVALID, "name either a workspace conversation or a job, not both")
+        if job_id:
+            table, key_col, key = "job", "job_id", job_id
+        elif ws_conv_id:
+            table, key_col, key = "workspace_conversation", "ws_conv_id", ws_conv_id
+        else:
+            return OpResult(C.INVALID, "a workspace conversation or a job must be named")
+        row = self.store.one(f"SELECT * FROM {table} WHERE {key_col} = ?", (key,))
+        if row is None:
+            return OpResult(C.NOT_FOUND, f"unknown {table} {key}")
+        at = C.now()
+        fields: dict[str, Any] = {"updated_at": at}
+        if archive is not None:
+            fields["archived_at"] = at if archive else None
+            fields["archive_reason"] = ((reason or "archived by the owner") if archive else None)
+        if delete is not None:
+            fields["deleted_at"] = at if delete else None
+            fields["deletion_reason"] = ((reason or "deleted by the owner") if delete else None)
+        with self.store.tx():
+            self.store.update_row(table, fields, f"{key_col} = ?", (key,))
+            if table == "job":
+                self.store.recompute_conversation_filter_state(row["ws_conv_id"], at=at)
+        fresh = self.store.one(f"SELECT * FROM {table} WHERE {key_col} = ?", (key,))
+        data = self._retention_view(fresh)
+        self.store.audit(actor=actor, operation=operation, entity_kind=table, entity_id=key,
+                        reason=reason or operation,
+                        details={"archive_state": data["archive_state"],
+                                 "deletion_state": data["deletion_state"],
+                                 "source_rows_deleted": False},
+                        origin=row.get("origin") or C.REAL,
+                        mock_label=row.get("mock_label"))
+        return OpResult(C.OK, f"{key}: archive={data['archive_state']} "
+                              f"deletion={data['deletion_state']}; nothing was removed "
+                              "from storage", data=data, provenance=row.get("origin") or C.REAL,
+                        label=row.get("mock_label"), mocked=(row.get("origin") == C.MOCK))
+
+    @staticmethod
+    def _retention_view(row: dict) -> dict:
+        """Archive and deletion travel together so neither can be mistaken for the other."""
+        return {
+            "ws_conv_id": row.get("ws_conv_id"),
+            "job_id": row.get("job_id"),
+            "archive_state": (C.ArchiveState.ARCHIVED if row.get("archived_at")
+                              else C.ArchiveState.ACTIVE),
+            "archived_at": row.get("archived_at"),
+            "archive_reason": row.get("archive_reason"),
+            "deletion_state": (C.DeletionState.DELETED if row.get("deleted_at")
+                               else C.DeletionState.RETAINED),
+            "deleted_at": row.get("deleted_at"),
+            "deletion_reason": row.get("deletion_reason"),
+            "source_rows_deleted": False,
+            "recoverable": True,
+            "retention_note": Ledger.RETENTION_NOTE,
+        }
+
     # ---------------------------------------------------------------- ingest ----
+
     def record_event(self, *, account_id: str, event_kind: str, dedup_key: str,
                      trigger_hash: str, project: Callable[[Any, dict], dict],
                      origin: str = C.REAL, mock_label: str | None = None) -> OpResult:

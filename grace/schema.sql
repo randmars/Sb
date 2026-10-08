@@ -179,11 +179,22 @@ CREATE TABLE IF NOT EXISTS workspace_conversation (
   association_kind        TEXT NOT NULL,        -- person|group
   association_id          TEXT NOT NULL,
   title                   TEXT NOT NULL,
+  -- queue_state/review_state/needs_me_reason are the conversation's own aggregate of
+  -- its work items (see job.queue_state). They are DERIVED from the jobs it hosts, so
+  -- two jobs in one conversation cannot overwrite each other's state; a conversation
+  -- with no jobs keeps its own state (e.g. an untriaged source message).
   queue_state             TEXT NOT NULL,        -- needs_me|working|idle  (application filter only, PRD §5)
   assignment_state        TEXT NOT NULL,        -- unassigned|assigned  (never archives the source)
   review_state            TEXT NOT NULL,        -- none|awaiting_review|awaiting_input|awaiting_approval|blocked
   current_input_revision  INTEGER NOT NULL DEFAULT 0,
   needs_me_reason         TEXT,                 -- question|draft|result|blocked|failure|uncertain_effect|null
+  -- Archive is a state, not a delete (PRD §8: the source stays authoritative). An
+  -- archived item is out of the default triage surfaces, remains stored, stays
+  -- retrievable and is never the same thing as a deleted/forgotten one.
+  archived_at             TEXT,                 -- set = archived; NULL = active
+  archive_reason          TEXT,
+  deleted_at              TEXT,                 -- application tombstone; no source row is removed
+  deletion_reason         TEXT,
   created_at              TEXT NOT NULL,
   updated_at              TEXT NOT NULL,
   origin                  TEXT NOT NULL,
@@ -266,6 +277,17 @@ CREATE TABLE IF NOT EXISTS job (
   instruction            TEXT NOT NULL,
   agent                  TEXT NOT NULL,
   job_state              TEXT NOT NULL,         -- §9 states (see contracts.JobState)
+  -- The queue/review/needs-me state is per JOB, derived from job_state by
+  -- ledger.JOB_FILTER_STATES. Deriving it per conversation was the Gate 1 defect: a
+  -- second job in the same conversation overwrote the first job's state and one job's
+  -- draft disappeared from the surfaces (PRD §5 independent states, §12, T04/T05/T12).
+  queue_state            TEXT NOT NULL DEFAULT 'working',   -- needs_me|working|idle
+  review_state           TEXT NOT NULL DEFAULT 'none',      -- contracts.ReviewState
+  needs_me_reason        TEXT,
+  archived_at            TEXT,                  -- archived job: out of triage, still stored
+  archive_reason         TEXT,
+  deleted_at             TEXT,                  -- tombstone; the job row is never removed
+  deletion_reason        TEXT,
   state_version          INTEGER NOT NULL DEFAULT 0,
   capability_plan        TEXT NOT NULL DEFAULT '{}',
   dependencies_json      TEXT NOT NULL DEFAULT '[]',
@@ -289,6 +311,8 @@ CREATE TABLE IF NOT EXISTS job (
 );
 CREATE INDEX IF NOT EXISTS ix_job_state ON job(job_state);
 CREATE INDEX IF NOT EXISTS ix_job_ws ON job(ws_conv_id, created_at);
+-- The triage lists read (queue_state, archived_at, deleted_at) per job.
+CREATE INDEX IF NOT EXISTS ix_job_filter ON job(queue_state, ws_conv_id);
 
 CREATE TABLE IF NOT EXISTS job_transition (
   transition_id   TEXT PRIMARY KEY,
@@ -394,6 +418,14 @@ CREATE TABLE IF NOT EXISTS draft (
   mock_label            TEXT,
   UNIQUE (ws_conv_id, job_id, version)
 );
+-- A draft's version is unique within its (conversation, job) scope. SQLite treats every
+-- NULL as distinct, so the table constraint above does NOT apply when job_id IS NULL and
+-- two drafts with the same idempotency key (explicit version, no job) could both exist.
+-- This expression index closes that hole in the SCHEMA, not only in the code path that
+-- happens to have a job (PRD §12 immutable append-only versions; §10/T13 approve an
+-- exact draft_version).
+CREATE UNIQUE INDEX IF NOT EXISTS ux_draft_version_scope
+  ON draft(ws_conv_id, COALESCE(job_id, ''), version);
 
 CREATE TABLE IF NOT EXISTS attachment_ref (
   attachment_ref_id  TEXT PRIMARY KEY,
