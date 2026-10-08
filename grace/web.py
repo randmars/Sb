@@ -1622,7 +1622,8 @@ class _AppMixin:
                                "only rather than inventing a schedule."),
             "adapters": [a.describe() for a in svc.adapters.values()],
             "manifest_note": ("A capability stays unsupported until a probe on Randy's Mac confirms "
-                              "it (PRD §11, Gate 2). Nothing here has been probed."),
+                              "it (PRD §11, Gate 2). "
+                              + capability_honesty(svc)["explanation"]),
         })
 
     # ----------------------------------------------------------- mutations --
