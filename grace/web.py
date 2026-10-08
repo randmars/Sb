@@ -43,7 +43,7 @@ from . import contracts as C
 from .contracts import ApprovalState, EffectState, JobState, QueueState
 from .effects import InjectedFault
 from .ingest import Ingest
-from .ledger import Ledger
+from .ledger import Ledger, _job_brief
 from .service import MOCK_WORKER_NOTE, Grace
 
 #: What an archived or deleted item is, said the same way on every surface. It is the
@@ -1217,7 +1217,7 @@ class _AppMixin:
             ws["review_state"] = job_row["review_state"]
             ws["needs_me_reason"] = job_row["needs_me_reason"]
             ws["work_item_id"] = f"{ws_id}::{job_id}"
-        item = self._item(ws, svc.ledger._job_brief(job_row, ws_row) if job_row else None)
+        item = self._item(ws, _job_brief(job_row, ws_row) if job_row else None)
 
         source_conversations = []
         for link in ws["source_links"]:

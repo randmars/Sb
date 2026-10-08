@@ -25,9 +25,17 @@ from tests.test_web_ui import WebCase
 #: Storage rows whose count an archive must not change. ``audit_event`` is deliberately
 #: not in this list: archiving *records itself* in the ledger's audit trail, and that is the
 #: only row an archive may add.
+#:
+#: ``input_request`` appeared in an earlier draft of this census and does not exist in this
+#: release, in ``grace/schema.sql`` or anywhere in the code: the question an agent returns
+#: and the owner's answer are both recorded as ``job_input`` versions (kind
+#: 'answer'/'follow_up'/'information', PRD §5) with the question itself held as a ``result``
+#: of kind 'question'. The census therefore names the tables the schema actually has —
+#: including ``job_input``, which is the real row behind an input request — so that it can
+#: only fail for a genuine reason rather than for a guess.
 STORAGE_TABLES = ("source_conversation", "message_ref", "workspace_source_link",
-                  "workspace_conversation", "job", "draft", "result", "outbox",
-                  "input_request", "session_binding")
+                  "workspace_conversation", "job", "job_input", "job_transition", "attempt",
+                  "draft", "result", "outbox", "session_binding")
 
 
 class TestArchiveIsNotDelete(GraceTestCase):

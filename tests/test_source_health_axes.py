@@ -73,13 +73,23 @@ class TestAxesComeFromTheProbe(TestHealthAxes):
                 self.assertIn("stored_health_state", source)
 
     def test_transport_follows_the_live_probe_not_the_stored_row(self) -> None:
-        """The stored row says 'connected'; the probe says 'offline'. Transport must say offline."""
+        """The stored row reports a healthy state; the probe says 'offline'. Transport must say offline."""
         account = self.account_id("mock_mail")
         stored = self.svc.store.one("SELECT health_state FROM source_account WHERE account_id = ?",
                                    (account,))
-        self.assertEqual(stored["health_state"], "connected")
+        # The ledger records 'current' for this account — the state the fixture load writes, and
+        # one of the eight states PRD §6 names ("connected, syncing, current, delayed, permission
+        # denied, offline, error, and partial history"). No code path in this release writes
+        # 'connected' into source_account, so asserting that exact word would be asserting a
+        # guess rather than the ledger. What this test needs is the premise it is built on: the
+        # stored row is healthy while the live probe is not.
+        self.assertIn(stored["health_state"], ("connected", "syncing", "current"),
+                      "the stored row must report a healthy state for this test to mean anything")
+        self.assertNotEqual(stored["health_state"], "offline")
         offline = GraceFaults(self, ("offline",)).source_health()
         entry = next(s for s in offline if s["account_id"] == account)
+        # The stored state stays visible as its own labelled value, and it did not change.
+        self.assertEqual(entry["stored_health_state"], stored["health_state"])
         transport = entry["health_axes"]["transport"]
         self.assertEqual(transport["state"], "offline")
         self.assertFalse(transport["green"])
