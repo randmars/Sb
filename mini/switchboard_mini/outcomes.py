@@ -75,10 +75,15 @@ FIXTURE_DISCLAIMER = (
     "--fixture-mode. No Mail.app was contacted and no mailbox was read; these are not "
     "observations of any real mailbox or account."
 )
-#: A recorded read is labelled for the source it would have read. The Mail wording is the
-#: default because it came first; a Beeper fixture must not claim no *Mail* was contacted
-#: and say nothing about Beeper Desktop.
+#: A recorded read is labelled for the source it would have read. Every source the probe
+#: knows has its own entry, so no source can inherit another's wording by falling back:
+#: a Mail fixture must not claim no *Beeper Desktop* was contacted, and — the defect this
+#: map grew a ``hermes`` entry for — a Hermes fixture must not claim no *Mail.app* was
+#: contacted. ``FIXTURE_DISCLAIMER`` remains the default only for a source this map does
+#: not know, and ``test_mini_hermes`` asserts the map covers every source ``CAPABILITIES``
+#: declares, so the next source added cannot quietly land on the Mail wording.
 FIXTURE_DISCLAIMER_BY_SOURCE = {
+    "mail": FIXTURE_DISCLAIMER,
     "beeper": (
         "FIXTURE — answered from a recorded result shipped in this repository in "
         "--fixture-mode. No Beeper Desktop was contacted and no chat, message or contact "
@@ -88,6 +93,12 @@ FIXTURE_DISCLAIMER_BY_SOURCE = {
         "FIXTURE — answered from a recorded result shipped in this repository in "
         "--fixture-mode. No Contacts database was read and no contact, identifier, key or "
         "change-history token was observed; these are not observations of any Mac."
+    ),
+    "hermes": (
+        "FIXTURE — answered from a recorded result shipped in this repository in "
+        "--fixture-mode. No Hermes gateway was contacted and no capability, run, session or "
+        "event stream was observed; no token value is recorded here, and these are not "
+        "observations of any Hermes install."
     ),
 }
 
