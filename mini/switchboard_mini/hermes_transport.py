@@ -47,13 +47,24 @@ Typed states (:mod:`switchboard_mini.outcomes`, plus the Hermes-specific reason 
 below):
 
 * no token in the environment -> ``permission_denied`` / ``token_absent``
-* HTTP 401 -> ``permission_denied`` / ``token_rejected``; 403 ->
-  ``permission_denied`` / ``forbidden_by_hermes``
+* a configured key too short to run the echo check on -> ``permanent_error`` /
+  ``token_too_short_for_the_echo_check``. The floor is **ours**, and the refusal says so:
+  O17 states no minimum key length, but this worker will not run its echo check on a key
+  short enough to occur in ordinary prose, because a body echoing such a key would be
+  recorded and printed as if it had been checked.
+* HTTP 401 -> ``permission_denied`` / ``token_rejected``. A 403 is deliberately **not**
+  given a named state: no record in the pack describes a 403 for any path in this worker's
+  table (O17 says another profile's run id returns ``404, never 403``), so it is reported as
+  ``permanent_error`` / ``unexpected_status`` with the status recorded in the evidence,
+  rather than under a name borrowed from an operation no page describes it for
 * HTTP 404 on a discovery/health path -> ``unsupported`` /
   ``endpoint_not_in_installed_build``; on a run or session path -> ``unsupported`` /
   ``run_or_session_unknown_here`` (O17: another profile's run id returns 404, never 403)
 * HTTP 429 -> ``rate_limited`` / ``rate_limited`` (O17: over the 10-run cap the server
-  "rejected with HTTP 429", i.e. it rejects rather than queues -- the ledger owns the wait)
+  "rejected with HTTP 429", i.e. it rejects rather than queues -- the ledger owns the wait).
+  **Only on a run-starting request**: O17 records the 429 for "new run-starting requests",
+  so a 429 on any other operation is ``unexpected_status`` with the status recorded, never a
+  rate-limit borrowed from the record of another operation
 * a request this worker timed out on -> ``retryable_error`` / ``request_timeout`` (our own
   bound; no page in the pack names a timeout) -- **except for a POST**, where the request
   had already been written and whether the gateway acted is unknown: that is
@@ -66,7 +77,10 @@ below):
 * a POST whose response body could not be read at all -> ``outcome_unknown`` /
   ``submission_not_confirmed`` for the same reason as a POST timeout (defect fix, audit
   finding 3): a broken read of one's own response is not evidence that nothing happened
-* 409 -> ``permanent_error`` / ``idempotency_key_conflict`` (O17's documented code)
+* 409 -> ``permanent_error`` / ``idempotency_key_conflict`` -- **only on a run-starting POST
+  that actually carried an ``Idempotency-Key``**, which is the one request O17 documents a 409
+  for ("Reusing the same key with a different JSON payload returns HTTP 409"). On any other
+  operation a 409 is ``permanent_error`` / ``unexpected_status`` with the status recorded
 
 ``stand_in`` exists for one purpose: exercising this transport's wire layer on a host that
 is not Randy's Mac (there is no Hermes gateway on this Linux computer). A stand-in run
@@ -275,6 +289,27 @@ DOCUMENTED_TERMINAL_EVENT_NAMES = tuple(name for name in TERMINAL_EVENT_NAMES
 DEFAULT_TIMEOUT_S = 10
 DEFAULT_MAX_EVENTS = 200
 DEFAULT_MAX_EVENT_BYTES = 262144
+#: The shortest bearer key this worker will run the echo check against. **This floor is
+#: ours**: O17 states no minimum key length, and the audit found that a 1-7 character key
+#: silently skipped :func:`body_carries_token`, so an echoed body would have been recorded
+#: and printed as if it had been checked. A key below this floor is refused at the gate,
+#: with the refusal labelled as this worker's own policy rather than as a documented rule.
+MIN_TOKEN_LEN_FOR_ECHO_CHECK = 8
+#: The one operation a 409 or a 429 may be reported as its named state on: O17 documents
+#: both for run-starting requests (``POST /v1/runs`` and no other path).
+RUN_STARTING_OPERATIONS = ("run_submit",)
+#: Statuses the pack describes for one operation only, with the record's own scope. Reaching
+#: one of these anywhere else is a measurement with no documented meaning: it is reported as
+#: ``unexpected_status`` carrying this note, never under a name borrowed from the operation
+#: the page describes (honesty narrowing: a named state may not assert an evaluation the
+#: record does not cover).
+STATUSES_DESCRIBED_ELSEWHERE = {
+    403: ("no page in the pack describes a 403 for any path in this worker's table (O17 "
+          "says another profile's run id returns 404, never 403)"),
+    409: ("O17 records 409 for reusing an Idempotency-Key with a different payload on a "
+          "run-starting POST"),
+    429: "O17 records 429 for a new run-starting request over the max_concurrent_runs cap",
+}
 #: Our own stop-settling poll bound (seconds and interval). O17 states no timeout and no
 #: forced-kill path, so the wait is bounded by us and reported when it is exceeded.
 DEFAULT_SETTLE_SECONDS = 20.0
@@ -298,11 +333,17 @@ TYPED_STATES = {
         "code": O.PERMISSION_DENIED,
         "meaning": "HTTP 401: the gateway rejected the bearer key",
         "next_action": "use the key the API server was started with (API_SERVER_KEY, O17)"},
-    "forbidden_by_hermes": {
-        "code": O.PERMISSION_DENIED,
-        "meaning": "HTTP 403: the key is valid but this request is not permitted",
-        "next_action": ("record the status and path: O17 documents 404 (never 403) for "
-                        "another profile's run id")},
+    "token_too_short_for_the_echo_check": {
+        "code": O.PERMANENT_ERROR,
+        "meaning": ("the configured bearer key is shorter than "
+                    f"{MIN_TOKEN_LEN_FOR_ECHO_CHECK} characters, so this worker refuses to "
+                    "run its echo check against it: O17 states no minimum key length, and "
+                    "this floor is ours"),
+        "next_action": ("put a key of at least "
+                        f"{MIN_TOKEN_LEN_FOR_ECHO_CHECK} characters into the environment "
+                        "variable this worker reads, or record that this install's key is "
+                        "shorter and treat the echo check as unavailable"),
+    },
     "token_echoed_in_response": {
         "code": O.PERMANENT_ERROR,
         "meaning": ("the response body contained the bearer key value itself, so the body "
@@ -513,12 +554,21 @@ def token_present(override: Optional[str] = None) -> bool:
 def token_status_document(override: Optional[str] = None) -> dict:
     """What may be said about the key without saying the key."""
     name = token_env_name(override)
+    value = token_value(override)
     return {
-        "token_present": token_present(override),
+        "token_present": bool(value),
         "token_source": f"process environment {name}",
         "token_env_var": name,
         "token_value_recorded": False,
         "token_read_from_file": False,
+        "echo_check_min_length": MIN_TOKEN_LEN_FOR_ECHO_CHECK,
+        "echo_check_min_length_is_ours": True,
+        "token_below_the_echo_check_floor": bool(value) and len(value) < MIN_TOKEN_LEN_FOR_ECHO_CHECK,
+        "echo_check_floor_note": (
+            "O17 states no minimum key length: the floor above is this worker's own, and a "
+            "key below it is refused at the gate rather than used for a check it could not "
+            "make (a 1-7 character key would occur in ordinary prose, so an echo would go "
+            "undetected and the body would be recorded and printed)"),
         "never_read_paths": list(NEVER_READ_PATHS),
         "note": ("the key is read from the process environment only. O21 documents that "
                  "~/.hermes/.env can hold a 1Password service-account token ('can read "
@@ -610,10 +660,12 @@ def body_carries_token(text: str, token: str) -> bool:
     O17 documents that ``X-Hermes-Session-Key`` is "echoed back on responses (JSON + SSE)"
     and that tool-event previews pass "forced secret redaction" -- but a *promise* about
     redaction is not an observation, so every response is checked rather than trusted.
+
+    The length floor is ours (see :data:`MIN_TOKEN_LEN_FOR_ECHO_CHECK`). It is a floor for
+    the *check*, not a licence to run with a short key: the gate refuses a key below it, so
+    this branch is a defence in depth and never the reason a short key goes unchecked.
     """
-    if not token or len(token) < 8:
-        # A one-character key would match ordinary prose; the check is only meaningful for
-        # a real key length, and a shorter one is refused by the gateway anyway.
+    if not token or len(token) < MIN_TOKEN_LEN_FOR_ECHO_CHECK:
         return False
     return token in (text or "")
 
@@ -716,7 +768,8 @@ class HermesTransport(abc.ABC):
     @abc.abstractmethod
     def call(self, operation: str, *, params: Optional[dict] = None,
              body: Optional[dict] = None, path_params: Optional[dict] = None,
-             headers: Optional[dict] = None, max_bytes: Optional[int] = None) -> O.Outcome: ...
+             headers: Optional[dict] = None, max_bytes: Optional[int] = None,
+             max_events: Optional[int] = None) -> O.Outcome: ...
 
 
 # ------------------------------------------------------------------- the real one --
@@ -768,6 +821,28 @@ class HttpHermesTransport(HermesTransport):
                 next_action=(f"put the gateway key the owner configured "
                              f"(API_SERVER_ENABLED / API_SERVER_KEY, O17) into this "
                              f"process's environment as {name} and re-run"))
+        if len(self._token) < MIN_TOKEN_LEN_FOR_ECHO_CHECK:
+            # Our own policy, named as ours (audit finding: the 8-character floor in
+            # ``body_carries_token`` let a 1-7 character key skip the echo check silently, so
+            # an echoed body would have been recorded and printed as if it had been checked).
+            return O.Outcome.permanent(
+                f"the configured Hermes bearer key is {len(self._token)} characters long, "
+                f"below the {MIN_TOKEN_LEN_FOR_ECHO_CHECK}-character floor this worker needs "
+                "to run its response echo check, so no request was made. O17 states no "
+                "minimum key length: this floor is this worker's own policy, not a documented "
+                "rule, and a key shorter than it would match ordinary prose, so an echoed "
+                "body would be recorded and printed undetected.",
+                reason="token_too_short_for_the_echo_check", adapter=self.name,
+                data={**token_status_document(self.token_env),
+                      "token_length_recorded": False,
+                      "token_length_class": ("below the worker's echo-check floor"),
+                      "refusal_is_ours": True,
+                      "floor_is_ours": True,
+                      "documented_minimum_key_length": None,
+                      "requests_made": 0, "no_request_made": True},
+                next_action=(f"use a key of at least {MIN_TOKEN_LEN_FOR_ECHO_CHECK} "
+                             "characters, or record that this install's key is shorter and "
+                             "treat the echo check as unavailable"))
         return None
 
     def host_gate(self) -> Optional[O.Outcome]:
@@ -822,7 +897,8 @@ class HttpHermesTransport(HermesTransport):
     def call(self, operation: str, *, params: Optional[dict] = None,
              body: Optional[dict] = None, path_params: Optional[dict] = None,
              headers: Optional[dict] = None,
-             max_bytes: Optional[int] = None) -> O.Outcome:
+             max_bytes: Optional[int] = None,
+             max_events: Optional[int] = None) -> O.Outcome:
         if operation not in ENDPOINTS:
             return self._blocked_outcome(refusal_outcome(operation))
         missing = [name for name in REQUIRED_PATH_PARAMS.get(operation, ())
@@ -844,12 +920,20 @@ class HttpHermesTransport(HermesTransport):
                     next_action="send 1-255 visible ASCII characters in Idempotency-Key "
                                 "(O17)"))
         resolved_path = resolve_path(ENDPOINTS[operation]["path"], path_params)
+        # The last-line guard, wired in (audit finding: ``unsubstituted_placeholders`` was
+        # defined and exported but never called, so a template that still held a parameter
+        # after resolution would have gone on the wire -- the literal ``{accountID}`` the
+        # Beeper slice once shipped). Refused before the request, never sent.
+        leftover = unsubstituted_placeholders(resolved_path)
+        if leftover:
+            return self._blocked_outcome(missing_path_parameter(operation, leftover))
         started = time.monotonic()
         try:
             response = self._request(operation, params, body, resolved_path, headers)
         except urllib.error.HTTPError as exc:
             outcome = self._from_response(operation, _replay_for(exc), started, max_bytes,
-                                          idempotency_key=idem, body=body)
+                                          idempotency_key=idem, body=body,
+                                          max_events=max_events)
         except urllib.error.URLError as exc:
             outcome = self._from_url_error(operation, exc, started,
                                            idempotency_key=idem, body=body)
@@ -873,7 +957,8 @@ class HttpHermesTransport(HermesTransport):
                 next_action="retry the read"))
         else:
             outcome = self._from_response(operation, response, started, max_bytes,
-                                          idempotency_key=idem, body=body)
+                                          idempotency_key=idem, body=body,
+                                          max_events=max_events)
         if isinstance(outcome.data, dict):
             outcome.data.setdefault("path_resolved", resolved_path)
             outcome.data.setdefault("path_params_supplied",
@@ -982,7 +1067,8 @@ class HttpHermesTransport(HermesTransport):
     def _from_response(self, operation: str, response, started: float,
                        max_bytes: Optional[int], *,
                        idempotency_key: Optional[str] = None,
-                       body: Optional[dict] = None) -> O.Outcome:
+                       body: Optional[dict] = None,
+                       max_events: Optional[int] = None) -> O.Outcome:
         status = getattr(response, "status", None) or getattr(response, "code", 0) or 0
         try:
             raw = response.read() if hasattr(response, "read") else b""
@@ -1046,14 +1132,11 @@ class HttpHermesTransport(HermesTransport):
                 next_action=("use the key the profile's API server was started with "
                              "(API_SERVER_KEY, O17); a named profile with no key of its "
                              "own 'fails closed' (O17)")), extra=base)
-        if status == 403:
-            return self._stamp(O.Outcome.permission_denied(
-                f"the Hermes gateway answered 403 for {ENDPOINTS[operation]['path']}: the "
-                "key is valid but this request is not permitted. No data was returned.",
-                reason="forbidden_by_hermes", data=base,
-                next_action=("record the status and the path: O17 documents 404 (never 403) "
-                             "for another profile's run id, so a 403 here is a new "
-                             "observation worth recording")), extra=base)
+        # A 403 gets no named state (audit finding): O17 documents 404 for another profile's
+        # run id and "never 403", and no page in the pack describes a 403 for any path this
+        # worker reads, so the old ``forbidden_by_hermes`` row asserted "the key is valid" for
+        # a status no record covers. It falls through to ``unexpected_status`` below with the
+        # status recorded, and ``STATUSES_DESCRIBED_ELSEWHERE`` carries the record's scope.
         if status == 404:
             if ENDPOINTS[operation]["kind"] in ("run", "session"):
                 return self._stamp(O.Outcome.unsupported(
@@ -1073,7 +1156,13 @@ class HttpHermesTransport(HermesTransport):
                 next_action=("record `hermes --version` and this status beside the row; a "
                              "missing required endpoint blocks the corresponding release "
                              "claim rather than being simulated")), extra=base)
-        if status == 409:
+        # 409 and 429 are named states O17 records for *run-starting* requests, so they are
+        # reported as those states only on the operation the record describes, and (for 409)
+        # only when the request actually carried the header the record talks about. Anything
+        # else is ``unexpected_status``: a named state borrowed from another operation's
+        # record would assert an evaluation no page covers (audit finding: honesty narrowing).
+        run_starting = operation in RUN_STARTING_OPERATIONS
+        if status == 409 and run_starting and idempotency_key is not None:
             return self._stamp(O.Outcome.permanent(
                 "the Hermes gateway answered 409 for " + ENDPOINTS[operation]["path"]
                 + ": this is O17's documented idempotency_key_conflict — the same "
@@ -1082,7 +1171,7 @@ class HttpHermesTransport(HermesTransport):
                 next_action=("do not re-send: a different payload under a reserved key is "
                              "refused by design (O17). Use a fresh key for new work, and "
                              "the same key only for an identical retry")), extra=base)
-        if status == 429:
+        if status == 429 and run_starting:
             return self._stamp(O.Outcome.rate_limited(
                 "the Hermes gateway answered 429 for " + ENDPOINTS[operation]["path"]
                 + ": too many concurrent runs. O17 names the default cap "
@@ -1092,6 +1181,15 @@ class HttpHermesTransport(HermesTransport):
                 next_action=("let the job ledger own the wait and retry later: this server "
                              "rejects rather than queues, so a retry loop here would just "
                              "re-hit the cap")), extra=base)
+        if status in STATUSES_DESCRIBED_ELSEWHERE and status not in (200, 202):
+            note = STATUSES_DESCRIBED_ELSEWHERE[status]
+            if status in (409, 429):
+                note = (note + ", and this request (" + operation + ") does not match that "
+                        "description: it is "
+                        + ("a run-starting request that carried no Idempotency-Key"
+                           if run_starting else "not a run-starting request"))
+            base = {**base, "status_has_no_documented_meaning_for_this_operation": True,
+                    "status_described_elsewhere": note}
         if 500 <= status:
             return self._stamp(O.Outcome.retryable(
                 f"the Hermes gateway answered {status} for {ENDPOINTS[operation]['path']}",
@@ -1105,9 +1203,16 @@ class HttpHermesTransport(HermesTransport):
         # by name/count only (never payload text). Checked before the JSON-shape refusal,
         # because a correctly-formed event stream is *expected* not to be a JSON document.
         if document is None and text.strip() and operation == "run_events":
-            parsed = parse_event_names(text)
+            # The caller's cap, not an inert keyword (audit finding): ``run_events(max_events)``
+            # used to accept a bound it never passed on, so the transport always parsed with
+            # ``DEFAULT_MAX_EVENTS``. The cap is ours (no page names one) and is recorded.
+            applied_limit = int(max_events or DEFAULT_MAX_EVENTS)
+            parsed = parse_event_names(text, limit=applied_limit)
             return self._stamp(O.Outcome.ok(
                 {**base, "event_stream": True, **parsed,
+                 "event_limit_applied": applied_limit,
+                 "event_limit_is_ours": True,
+                 "event_limit_came_from_caller": bool(max_events),
                  "body_bytes_read": byte_count,
                  "http_status_note": ("O17 documents this endpoint as SSE of tool-call "
                                       "progress, token deltas and lifecycle events")}),
@@ -1350,7 +1455,8 @@ class RecordedHermesTransport(HermesTransport):
 
     def call(self, operation: str, *, params: Optional[dict] = None,
              body: Optional[dict] = None, path_params: Optional[dict] = None,
-             headers: Optional[dict] = None, max_bytes: Optional[int] = None) -> O.Outcome:
+             headers: Optional[dict] = None, max_bytes: Optional[int] = None,
+             max_events: Optional[int] = None) -> O.Outcome:
         if operation not in ENDPOINTS:
             return self._out(refusal_outcome(operation))
         missing = [name for name in REQUIRED_PATH_PARAMS.get(operation, ())
@@ -1406,7 +1512,11 @@ class RecordedHermesTransport(HermesTransport):
                 + " — the bearer key was rejected.", reason="token_rejected", data=base,
                 next_action="use the key the profile's API server was started with "
                             "(API_SERVER_KEY, O17)"), extra=base)
-        if status == 429:
+        # Same narrowing as the live transport (audit finding): a recorded 429/409 is that
+        # named state only on the operation O17 records it for, so a scenario cannot make a
+        # GET look rate-limited or an unknown 409 look like an idempotency conflict.
+        fixture_run_starting = operation in RUN_STARTING_OPERATIONS
+        if status == 429 and fixture_run_starting:
             return self._out(O.Outcome.rate_limited(
                 "FIXTURE: the recorded scenario answers 429 for " + meta["path"]
                 + " — too many concurrent runs (O17: the server rejects rather than "
@@ -1423,21 +1533,35 @@ class RecordedHermesTransport(HermesTransport):
                 f"FIXTURE: the recorded scenario answers 404 for {meta['path']} — the "
                 "installed build does not serve it",
                 reason="endpoint_not_in_installed_build", data=base), extra=base)
-        if status == 409:
+        if status == 409 and fixture_run_starting and idem is not None:
             return self._out(O.Outcome.permanent(
                 "FIXTURE: the recorded scenario answers 409 for " + meta["path"]
                 + " — idempotency_key_conflict (O17)", reason="idempotency_key_conflict",
                 data=base, next_action="use the same key only for an identical retry"),
                 extra=base)
+        if status in STATUSES_DESCRIBED_ELSEWHERE and status not in (200, 202):
+            note = STATUSES_DESCRIBED_ELSEWHERE[status]
+            if status in (409, 429):
+                note = (note + ", and this recorded request (" + operation + ") does not "
+                        "match that description: it is "
+                        + ("a run-starting request that carried no Idempotency-Key"
+                           if fixture_run_starting else "not a run-starting request"))
+            base = {**base, "status_has_no_documented_meaning_for_this_operation": True,
+                    "status_described_elsewhere": note}
         if status not in (200, 202):
             return self._out(O.Outcome.permanent(
                 f"FIXTURE: the recorded scenario answers status {status} for {meta['path']}",
                 reason="unexpected_status", data=base), extra=base)
         if stream is not None:
-            parsed = parse_event_names(stream,
-                                       limit=int(self.fixture.get("max_events",
-                                                                  DEFAULT_MAX_EVENTS)))
-            return self._out(O.Outcome.ok({**base, "event_stream": True, **parsed}),
+            # The caller's cap wins over the scenario's recorded default (audit finding: the
+            # adapter's ``max_events`` argument used to be inert).
+            applied_limit = int(max_events
+                                or self.fixture.get("max_events", DEFAULT_MAX_EVENTS))
+            parsed = parse_event_names(stream, limit=applied_limit)
+            return self._out(O.Outcome.ok({**base, "event_stream": True, **parsed,
+                                           "event_limit_applied": applied_limit,
+                                           "event_limit_is_ours": True,
+                                           "event_limit_came_from_caller": bool(max_events)}),
                              extra={**base, "idempotency_header_seen":
                                     "Idempotency-Replayed" in response_headers})
         return self._out(O.Outcome.ok({**base, "document": payload,
@@ -1507,6 +1631,7 @@ __all__ = [
     "REQUIRED_PATH_PARAMS", "IDEMPOTENCY_KEY_MAX", "MAX_CONCURRENT_RUNS_DEFAULT",
     "RUN_STATUSES", "RUN_TERMINAL_STATUSES", "DOCUMENTED_EVENT_NAMES",
     "TERMINAL_EVENT_NAMES", "DOCUMENTED_TERMINAL_EVENT_NAMES", "DEFAULT_MAX_EVENTS",
+    "MIN_TOKEN_LEN_FOR_ECHO_CHECK", "RUN_STARTING_OPERATIONS", "STATUSES_DESCRIBED_ELSEWHERE",
     "DEFAULT_SETTLE_SECONDS", "token_env_name", "token_value", "token_present",
     "token_status_document", "base_url_from_env", "standin_requested", "profile_prefix",
     "resolve_path", "unsubstituted_placeholders", "validate_idempotency_key", "scrub_secrets",

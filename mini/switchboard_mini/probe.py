@@ -1086,14 +1086,17 @@ def _probe_deliberately_absent(context: ProbeContext, capability: Capability) ->
 
 
 def _probe_documented(context: ProbeContext, capability: Capability) -> dict:
-    """One row per capability the Gate 2 pack documents but this worker cannot measure.
+    """One row per capability no adapter in *this run* can measure.
 
     Nothing is contacted and nothing is claimed: the row is ``origin: documentation``,
     ``supported: false``, ``state: 'unmeasured'``, and it carries the pack refs it quotes,
     the page's own facts, the page's silences and the Mac procedure that would settle it.
-    This behaves identically on every host on purpose -- the source has no adapter here or
-    on the Mac yet, so there is nothing a different host could measure differently, and
-    inventing a host-specific answer would be the one thing this row must not do.
+
+    The fallback fires when the capability's source has no adapter **in this run** -- the
+    installed worker has adapters for Mail, Beeper, Contacts and Hermes, and a run can be
+    narrowed (``probe --mail-only``), so the honest sentence names the run, never the
+    worker (audit finding C: it used to print "this worker has no <source> adapter in this
+    slice", which stopped being true as each adapter landed).
     """
     from .documented_capabilities import PACK_PATH
     evidence = {
@@ -1104,9 +1107,9 @@ def _probe_documented(context: ProbeContext, capability: Capability) -> dict:
         "documented_absences": list(capability.absences),
         "mac_probe_procedure": list(capability.procedure),
         "why_unmeasured": (
-            "this worker has no " + capability.source + " adapter in this slice, so nothing "
-            "was read and nothing could be measured on any host. The row records the "
-            "documented surface and the procedure that measures it; it never records a "
+            "no " + capability.source + " adapter was in this run, so nothing was read for "
+            "this capability here and nothing could be measured on any host. The row records "
+            "the documented surface and the procedure that measures it; it never records a "
             "result. A documentation read can never set supported: true"),
         "no_source_contacted": True,
         "observed_version_reason": (

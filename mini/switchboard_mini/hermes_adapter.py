@@ -261,8 +261,14 @@ class HermesReadOnlyAdapter:
         process's behaviour, so this reader records the event *names* and how many of each
         arrived, the order, and whether anything outside O17's documented vocabulary
         appeared — and stores no ``data:`` payload text at all.
+
+        ``max_events`` is passed to the transport, which applies it while parsing (defect
+        fix, audit finding: the argument used to be accepted here and then dropped, so the
+        transport always parsed with its own default and the cap a caller asked for was
+        inert). No page in the pack names a cap, so the applied value is recorded as ours.
         """
-        return self._read("run_events", path_params={"run_id": run_id})
+        return self._read("run_events", path_params={"run_id": run_id},
+                          max_events=int(max_events))
 
     # -- the one submission ------------------------------------------------
     def submit_run(self, input_text: str, *, idempotency_key: str,

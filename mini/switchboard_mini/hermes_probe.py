@@ -33,14 +33,19 @@ say so rather than rounding up:
   adapter measures it) and *a resumed run echoing its ``session_id`` plus
   ``X-Hermes-Session-Key`` being accepted* (that needs a run carrying session history, so
   it is the owner's half). Half a measurement is reported as half.
-* ``hermes_execution_modes``' tool/toolset-names half comes from ``GET /v1/toolsets``; the
-  ``terminal.backend`` half is a value only the owner can read out of his profile, so the
-  row stays unsupported until that half arrives.
+* ``hermes_execution_modes``' tool/toolset-names half comes from ``GET /v1/toolsets`` and
+  its computer-action half is a **search** over the names this build returned (advertised
+  feature keys, toolset names, tool names) whose result -- found, or
+  ``observed_absent: true`` -- is what the row records; the ``terminal.backend`` half is a
+  value only the owner can read out of his profile, so the row stays unsupported until that
+  half arrives (audit finding A: the computer-action field used to be a constant while the
+  assertion claimed that half was measured).
 * ``hermes_approval_modes`` can observe the advertised ``run_approval`` feature flag, but
   the documented trigger is a *dangerous-class command* and O20's own safe example is
   ``bash -c 'echo probe'`` -- which this worker will not submit, because it creates no
-  general run. The human-decision half is therefore the owner's observation, and the row
-  says exactly that.
+  general run. The human-decision half is therefore the owner's observation, and one
+  observation settles only the raises-a-prompt vs denies-without-one half of the assertion:
+  the row names the sub-behaviour it covered and the three it did not (audit finding B).
 
 ``hermes_credential_resolution`` is **not measurable by this adapter at all**, and its own
 limitation says why: a 200 on an authenticated read proves only that ``API_SERVER_KEY`` is
@@ -76,6 +81,45 @@ OWNER_APPROVAL_TRIGGER_COMMAND = "bash -c 'echo probe'"
 #: The closed set of owner observations for the approval half. Free text would let a row
 #: claim support from a sentence; a closed set cannot.
 APPROVAL_OBSERVATIONS = ("waiting_for_approval", "instant_deny", "not_reproducible")
+#: The words a computer/desktop/GUI execution mechanism would be named with. O19 counts
+#: 'gui', 'computer', 'desktop' and 'Accessibility' **0** times on the page, and O17's
+#: feature map names none -- but a count on a page is not an observation of the installed
+#: build. This list is what the *observed* surface is searched with, so the row can record
+#: ``observed_absent: true`` from evidence instead of asserting an absence it never looked
+#: for (audit finding A: the row's assertion claimed the computer-action half was measured
+#: while ``computer_action_mechanism`` was a constant and nothing ever searched for one).
+COMPUTER_ACTION_TERMS = ("computer", "gui", "desktop", "accessibility", "screenshot",
+                         "mouse", "keyboard", "screen", "click")
+#: The two sub-behaviours of ``hermes_approval_modes``' assertion, and which of them one
+#: owner observation actually settles. Audit finding B: the row claimed all three from one
+#: observation, so the covered/uncovered split is now recorded on the row.
+APPROVAL_SUB_BEHAVIOURS = {
+    "waiting_for_approval": {
+        "measured": ("a dangerous-class command was held for a human decision: the owner saw "
+                     "the approval prompt on the surface they ran it in"),
+        "unmeasured": ("the active profile's configured approvals.mode value",
+                       "what a prompt that times out does (O20 documents fail-closed denial; "
+                       "this worker did not observe it)",
+                       "whether an unattended/API surface denies instantly or raises "
+                       "approval.request"),
+    },
+    "instant_deny": {
+        "measured": ("a dangerous-class command was denied without a human decision on the "
+                     "surface the owner ran it in (the observation does not say which "
+                     "surface, so none is inferred)"),
+        "unmeasured": ("the active profile's configured approvals.mode value",
+                       "what a prompt that times out does (O20 documents fail-closed denial; "
+                       "this worker did not observe it)",
+                       "whether an unattended/API surface denies instantly or raises "
+                       "approval.request"),
+    },
+}
+
+
+def names_a_computer_action(name: str) -> list:
+    """Which computer/desktop-action words an observed name contains ([] when none)."""
+    text = (name or "").lower()
+    return [term for term in COMPUTER_ACTION_TERMS if term in text]
 
 
 def _adapter(context):
@@ -127,9 +171,14 @@ def _measured(context, capability, outcome, *, supported: bool, limitation: str,
             if supported else
             "measured on this host, but the documented assertion for this capability was "
             "not evaluated: see state_reason")
+    # ``granted`` for every measured row was the old behaviour (audit finding: a fixture or
+    # stand-in row has no permission to report, so it now says ``not_applicable`` and records
+    # why). ``denied`` always comes from the outcome itself.
+    permission_state, permission_reason = _permission_state_for(adapter, outcome)
+    evidence = {**evidence, "permission_state_reason": permission_reason}
     return _row(context, capability, supported=bool(supported),
                 state=(state or outcome.code),
-                permission_state=O.PERMISSION_GRANTED,
+                permission_state=permission_state,
                 limitation=limitation, evidence=evidence,
                 origin=adapter.origin, adapter_is_real=adapter.adapter_is_real,
                 label=adapter._label(),
@@ -157,11 +206,52 @@ def reason_sentence(reason: str) -> str:
     return sentence(reason)
 
 
+def _permission_state_for(adapter, outcome) -> tuple:
+    """``(shared-vocabulary permission state, why)`` for a measured row.
+
+    Audit finding (E): ``_measured`` hardcoded ``granted`` for every measured row, including
+    fixture and stand-in rows where no permission exists to grant. The honest reading:
+
+    * the gateway refusing the bearer key -> ``denied`` (the outcome's own code);
+    * a read that reached a real gateway -> ``granted``: the gateway accepting the key *is*
+      the permission observation, and that is the only thing that earns it;
+    * a recorded fixture or a stand-in responder -> ``not_applicable``: no gateway was asked
+      for permission, so there is no permission state to report. This is the closed-vocabulary
+      value Grace already stores for the worker's own manifest row, so the row contract is
+      unchanged;
+    * anything else (a local check that contacted nothing) -> ``not_determined``.
+    """
+    if outcome.code == O.PERMISSION_DENIED:
+        return (O.PERMISSION_STATE_DENIED,
+                "the outcome itself is a permission refusal, so the row reports denied")
+    if bool(getattr(outcome, "source_contacted", False)):
+        return (O.PERMISSION_GRANTED,
+                "a request reached a real Hermes gateway and it accepted the bearer key on "
+                "this read, which is the permission observation")
+    data = outcome.data if isinstance(outcome.data, dict) else {}
+    if data.get("stand_in") is True:
+        return (O.PERMISSION_NOT_APPLICABLE,
+                "the responder was a stand-in HTTP server, not a Hermes gateway: no "
+                "permission was asked for or granted, so there is none to report")
+    if not getattr(adapter, "adapter_is_real", False):
+        return (O.PERMISSION_NOT_APPLICABLE,
+                "the response came from a recorded fixture, not from a Hermes gateway: no "
+                "permission was asked for or granted, so there is none to report")
+    return (O.PERMISSION_NOT_DETERMINED,
+            "nothing was contacted and no permission refusal came back, so no permission "
+            "state was observed")
+
+
 def _not_a_real_measurement(context, capability, outcome, evidence: dict, *,
                             state: Optional[str] = None, note: str = "") -> dict:
     """A read that answered, but not from a real Hermes gateway."""
     adapter = _adapter(context)
-    stand_in = bool(adapter.adapter_is_real)
+    # The responder is read from the outcome's own data, not re-derived from the adapter
+    # class (audit finding: ``adapter_is_real`` means "this is the real transport class",
+    # which is the *opposite* of what a stand-in is -- a stand-in opener is driven THROUGH
+    # that class, and a fixture is driven through the other one).
+    data = outcome.data if isinstance(outcome.data, dict) else {}
+    stand_in = data.get("stand_in") is True
     if stand_in:
         limitation = ("the responder was "
                       f"{(outcome.data or {}).get('responder')!r}, not a real Hermes "
@@ -174,7 +264,7 @@ def _not_a_real_measurement(context, capability, outcome, evidence: dict, *,
                       + (" " + note if note else ""))
     return _measured(context, capability, outcome, supported=False,
                      state=state or outcome.code, limitation=limitation,
-                     evidence=evidence,
+                     evidence={**evidence, "responder_was_a_stand_in": stand_in},
                      values_from_source=(False if stand_in else None),
                      observed_version=_version_for(context),
                      observed_version_reason=_version_reason(context))
@@ -807,6 +897,11 @@ def probe_session_continuity(context, capability) -> dict:
 def probe_execution_modes(context, capability) -> dict:
     adapter = _adapter(context)
     toolsets = adapter.toolsets()
+    # The advertised feature map is a *second* read on purpose: O17's features map lives on
+    # GET /v1/capabilities, not on the toolsets endpoint, and audit finding A is that nothing
+    # ever looked for a computer/desktop mechanism in the observed capability surface. The
+    # read is recorded, so a reader can see which names the search actually had.
+    advertised = adapter.capabilities()
     evidence = _base_evidence(adapter, toolsets)
     terminal_backend = context.hermes_terminal_backend()
     document = _document(toolsets)
@@ -830,6 +925,31 @@ def probe_execution_modes(context, capability) -> dict:
             enabled_names.append(item.get("name"))
         if item.get("configured") is True:
             configured_names.append(item.get("name"))
+    # The names this build actually returned, in one list: the advertised feature keys, the
+    # toolset names and the tool names. Nothing else is searched, and the count is recorded,
+    # so a reader can tell a search that found nothing from a search that never happened.
+    features_map = (_document(advertised).get("features")
+                    if isinstance(_document(advertised), dict) else None)
+    feature_names = sorted(features_map) if isinstance(features_map, dict) else []
+    searched_names = sorted({*feature_names, *_names_in(items), *tool_names})
+    computer_action = {
+        "terms_searched_for": list(COMPUTER_ACTION_TERMS),
+        "names_searched": len(searched_names),
+        "names_searched_sample": searched_names[:50],
+        "feature_keys_searched": feature_names,
+        "capabilities_read_answered": bool(advertised.usable),
+        "capabilities_read_http_status": (advertised.data or {}).get("http_status"),
+        "matches": sorted({name for name in searched_names
+                           if names_a_computer_action(name)}),
+        "observed_absent": (None if not searched_names else not any(
+            names_a_computer_action(name) for name in searched_names)),
+        "basis": ("the advertised feature keys (GET /v1/capabilities), the toolset names and "
+                  "the tool names (GET /v1/toolsets) this build returned. A name is a match "
+                  "when it contains one of the search terms; a match is recorded as the name "
+                  "it was, never as a claim that a computer action is reachable from it. "
+                  "observed_absent is null when the surface returned no names at all, "
+                  "because an empty document is not evidence of absence"),
+    }
     evidence.update({
         "endpoint": "/v1/toolsets",
         "endpoint_ref": "O17",
@@ -850,14 +970,25 @@ def probe_execution_modes(context, capability) -> dict:
                                          if terminal_backend else None),
         "documented_terminal_backends": ["local", "docker", "ssh", "singularity", "modal",
                                          "daytona", "vercel_sandbox"],
-        "computer_action_mechanism": None,
+        # The computer-action half is now an observation, not a constant (audit finding A):
+        # every name this build actually returned -- the advertised feature keys, the toolset
+        # names and the tool names -- is searched for a computer/desktop/GUI mechanism, and
+        # the result is recorded either way. ``observed_absent`` is ``None`` when the surface
+        # returned no names at all, because an empty document is not evidence of absence.
+        "computer_action_mechanism": (computer_action["matches"][0]
+                                      if computer_action["matches"] else None),
+        "computer_action_observed": computer_action,
         "computer_action_note": (
-            "no documented or observed computer-action mechanism: O19 counts 'gui' 0, "
-            "'computer' 0, 'desktop' 0 and 'Accessibility' 0, and O17 has no GUI statement "
-            "either. The nearest named surfaces are browser automation "
-            "(browser_navigate/browser_snapshot/browser_vision, O19) and O17's optional "
-            "browser-extension control, which 'requires the API-server bearer key' and is "
-            "disabled by default. This row does not improvise one"),
+            "O19 counts 'gui' 0, 'computer' 0, 'desktop' 0 and 'Accessibility' 0 on the page "
+            "and O17 has no GUI statement either. That is a count on a page, not a "
+            "measurement, so this row searched the names the installed build returned (feature "
+            "keys, toolset names, tool names) for "
+            + ", ".join(COMPUTER_ACTION_TERMS) + " and recorded what it found. The nearest "
+            "named surfaces remain browser automation (browser_navigate/browser_snapshot/"
+            "browser_vision, O19) and O17's optional browser-extension control, which "
+            "'requires the API-server bearer key' and is disabled by default. This row does "
+            "not improvise a mechanism, and it does not call a browser tool a computer "
+            "action"),
         "ssh_no_gui_note": (
             "PRD line 251's sentence that SSH execution does not establish GUI-session "
             "access or macOS privacy permissions is our inference, not vendor text: O19 "
@@ -872,6 +1003,7 @@ def probe_execution_modes(context, capability) -> dict:
             note="the tool/toolset-names half of this row's assertion is what was exercised "
                  "here.")
     names_half = bool(evidence["toolset_names"] or evidence["tool_names_seen"])
+    computer_action_measured = computer_action["observed_absent"] is not None
     if not terminal_backend:
         return _measured(
             context, capability, toolsets, supported=False, state=O.PARTIAL,
@@ -886,11 +1018,19 @@ def probe_execution_modes(context, capability) -> dict:
             evidence=evidence, observed_version=_version_for(context),
             observed_version_reason=_version_reason(context))
     return _measured(
-        context, capability, toolsets, supported=names_half,
-        limitation=(None if names_half else
-                    "the owner supplied `terminal.backend`, but the toolset read returned "
-                    "no tool or toolset names, so the observed half of this row's "
-                    "assertion did not hold"),
+        context, capability, toolsets,
+        # Both halves of the assertion as narrowed on the row: the owner's
+        # `terminal.backend` is supplied, and the computer-action question was actually put
+        # to the observed surface (a search over zero names measures nothing).
+        supported=bool(names_half and computer_action_measured),
+        limitation=(None if (names_half and computer_action_measured) else
+                    ("the owner supplied `terminal.backend`, but "
+                     + ("the toolset read returned no tool or toolset names, so the observed "
+                        "half of this row's assertion did not hold"
+                        if not names_half else
+                        "the toolset read returned no names to search for a "
+                        "computer/desktop action mechanism, so that half is unmeasured")
+                     )),
         evidence=evidence, observed_version=_version_for(context),
         observed_version_reason=_version_reason(context))
 
@@ -947,12 +1087,23 @@ def probe_approval_modes(context, capability) -> dict:
             note="the advertised-flag half of this row's assertion is what was exercised "
                  "here.")
     if observation in ("waiting_for_approval", "instant_deny"):
+        # Audit finding B: the row's assertion names three behaviours and one owner
+        # observation settles one of them, so which sub-behaviour was covered and which three
+        # were not is recorded on the row rather than rounded up into the assertion.
+        covered = APPROVAL_SUB_BEHAVIOURS[observation]
         return _measured(
             context, capability, discovered, supported=True, limitation=None,
             evidence={**evidence,
+                      "approval_sub_behaviour_observed": observation,
+                      "approval_sub_behaviours_measured": [covered["measured"]],
+                      "approval_sub_behaviours_unmeasured": list(covered["unmeasured"]),
+                      "approval_assertion_is_narrowed_to_the_observation": True,
                       "assertion_evaluated_by": ("the owner's observation, recorded as "
                                                  "owner-supplied: the advertised flag "
-                                                 "alone is not the assertion")},
+                                                 "alone is not the assertion, and the "
+                                                 "observation settles only the "
+                                                 "raises-a-prompt vs denies-without-one "
+                                                 "half of it")},
             observed_version=_version_for(context), observed_version_reason=_version_reason(context))
     return _measured(
         context, capability, discovered, supported=False, state=O.PARTIAL,
