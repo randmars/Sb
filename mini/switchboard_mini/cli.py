@@ -6,9 +6,17 @@ nothing from outside the standard library and needs no virtualenv.
 
 Subcommands: ``probe``, ``run``, ``accounts``, ``mailboxes``, ``list``, ``fetch``,
 ``health``, ``manifest``, ``version``, the read-only Beeper family
-``beeper token|info|introspect|search|messages|contacts|accounts|chats|probe|health``, and
-the read-only Contacts family
-``contacts authorization|request-access|enumerate|restricted-keys|change-history|probe|health``.
+``beeper token|info|introspect|search|messages|contacts|accounts|chats|probe|health``, the
+read-only Contacts family
+``contacts authorization|request-access|enumerate|restricted-keys|change-history|probe|health``,
+and the read-only Hermes family
+``hermes token|capabilities|toolsets|skills|health|health-v1|sessions|session|session-messages|run-status|events|stop|approval|jobs|models|model-options|responses|chat-completions|session-mutations|probe``.
+
+The Hermes family is the only one with a submission in it, and it is fenced: the single run
+this worker will ever create is its own frozen probe constant, and only with
+``hermes probe --submit-test-run``. Its bearer key is read from the process environment
+(``API_SERVER_KEY``, or ``--token-env NAME``); ``~/.hermes/.env`` and
+``~/.hermes/config.yaml`` are never opened.
 
 Nothing in this worker sends, drafts or modifies Mail. ``--fixture-mode`` answers from
 recorded results in this repository and labels every document ``FIXTURE:``.
@@ -28,6 +36,11 @@ from .beeper_transport import (BASE_URL_ENV, DEFAULT_BASE_URL,
 from .contacts_adapter import build_adapter as build_contacts_adapter
 from .contacts_transport import (FIXTURE_SCENARIOS as CONTACTS_FIXTURE_SCENARIOS,
                                  compare_identifier_fingerprints, harden_token_file)
+from .hermes_adapter import (PROBE_TEST_RUN_INPUT,
+                             build_adapter as build_hermes_adapter)
+from .hermes_probe import APPROVAL_OBSERVATIONS
+from .hermes_transport import (FIXTURE_SCENARIOS as HERMES_FIXTURE_SCENARIOS,
+                               TOKEN_ENV as HERMES_TOKEN_ENV)
 from .mail_adapter import build_adapter
 from .mail_transport import FIXTURE_SCENARIOS
 from .probe import CAPABILITY_NAMES, run_probe
@@ -69,6 +82,14 @@ def _add_global_flags_to_subparsers(sub, *, beeper_scenarios=None) -> None:
             # tolerance promises to accept.
             is_beeper = "beeper" in (getattr(sub_parser, "prog", "") or "")
             is_contacts = "contacts" in (getattr(sub_parser, "prog", "") or "")
+            is_hermes = "hermes" in (getattr(sub_parser, "prog", "") or "")
+            if is_hermes and beeper_scenarios is None:
+                # The Hermes family nests too, and its scenarios are its own: a Mail or
+                # Contacts recording must never be read as a Hermes response, which would
+                # put a fabricated gateway answer behind a real-sounding label.
+                _add_global_flags_to_subparsers(
+                    nested, beeper_scenarios=HERMES_FIXTURE_SCENARIOS)
+                continue
             if is_contacts and beeper_scenarios is None:
                 # The Contacts family nests too, and its scenarios are its own: offering Mail
                 # scenario names inside `contacts ...` would let a Mail recording be read as a
@@ -341,8 +362,184 @@ def build_parser() -> argparse.ArgumentParser:
                          help="most contacts one bounded fetch returns (default 25)")
     c_probe.add_argument("--out", default=None, help="also write the rows to this file")
     c_probe.add_argument("--summary-to-stderr", action="store_true")
+    hermes = sub.add_parser(
+        "hermes", help="read-only Hermes gateway API (documented endpoints only)")
+    # The bearer key comes from the process environment, never from a file: O21 documents
+    # that ~/.hermes/.env can hold a service-account token that reads every secret the
+    # account has and that the gateway key lives in ~/.hermes/config.yaml.
+    hermes.add_argument("--fixture-mode", action="store_true", default=argparse.SUPPRESS,
+                        help="answer from a recorded Hermes scenario; every document is "
+                             "labelled FIXTURE:")
+    hermes.add_argument("--fixture-scenario", dest="hermes_fixture_scenario",
+                        default="healthy", choices=list(HERMES_FIXTURE_SCENARIOS),
+                        help="which recorded Hermes scenario to answer from (the Hermes "
+                             "scenarios differ from the Mail, Beeper and Contacts ones)")
+    hermes.add_argument("--base-url", default=None,
+                        help=f"API base URL (the documented default is 127.0.0.1:8642, "
+                             f"O17; override with HERMES_API_BASE_URL)")
+    hermes.add_argument("--token-env", default=None,
+                        help=f"which environment variable holds the bearer key (default "
+                             f"{HERMES_TOKEN_ENV}, O17). Never read from a file")
+    hermes.add_argument("--profile", default=None,
+                        help="route every request through the documented multi-profile "
+                             "prefix /p/<profile>/... (O17)")
+    hermes.add_argument("--stand-in-server", action="store_true",
+                        help="allow a local stand-in responder to answer (its documents "
+                             "are marked stand_in and can never claim a real source)")
+    hermes.add_argument("--run-id", default=None,
+                        help="the run id a run-scoped read acts on. The worker never "
+                             "invents one")
+    hermes.add_argument("--session-id", default=None,
+                        help="the session id to read back (never invented)")
+    hermes.add_argument("--limit", type=int, default=None,
+                        help="page size: the documented `limit` on GET /api/sessions (O17)")
+    hermes.add_argument("--terminal-backend", default=None,
+                        help="`terminal.backend` from your active profile's config.yaml "
+                             "(O19): the owner-supplied half of the execution-modes row")
+    hermes.add_argument("--approval-observation", default=None,
+                        choices=list(APPROVAL_OBSERVATIONS),
+                        help="what you observed after running the trigger command by hand "
+                             "(the owner-supplied half of the approval-modes row)")
+    hermes.add_argument("--hermes-version", default=None,
+                        help="`hermes --version` from your Mac, recorded as owner-supplied "
+                             "(no documented API surface exposes a build version)")
+    hermes.add_argument("--pretty", action="store_true", default=argparse.SUPPRESS,
+                        help="indent JSON output")
+    hermes_sub = hermes.add_subparsers(dest="hermes_command")
+    hermes_sub.add_parser("token", help="is a bearer key configured? (contacts nothing)")
+    hermes_sub.add_parser("capabilities", help="GET /v1/capabilities (O17)")
+    hermes_sub.add_parser("toolsets", help="GET /v1/toolsets (O17)")
+    hermes_sub.add_parser("skills", help="GET /v1/skills (O17)")
+    h_health = hermes_sub.add_parser("health", help="GET /health (O17)")
+    h_health.add_argument("--detailed", action="store_true", default=argparse.SUPPRESS,
+                          help="read the authenticated readiness check instead (O17)")
+    hermes_sub.add_parser("health-v1", help="GET /v1/health (O17)")
+    h_sessions = hermes_sub.add_parser("sessions", help="GET /api/sessions (O17)")
+    h_sessions.add_argument("--offset", type=int, default=argparse.SUPPRESS,
+                            help="documented offset on the session list (O17)")
+    h_sessions.add_argument("--source", default=argparse.SUPPRESS,
+                            help="documented source filter on the session list (O17)")
+    h_sessions.add_argument("--include-children", action="store_true",
+                            default=argparse.SUPPRESS,
+                            help="documented include_children on the session list (O17)")
+    hermes_sub.add_parser("session", help="GET /api/sessions/{id} (O17)")
+    h_messages = hermes_sub.add_parser("session-messages",
+                                       help="GET /api/sessions/{id}/messages (O17)")
+    h_messages.add_argument("--include-compacted", action="store_true",
+                            default=argparse.SUPPRESS,
+                            help="documented include_compacted on messages (O17)")
+    h_messages.add_argument("--inline-images", action="store_true",
+                            default=argparse.SUPPRESS,
+                            help="documented inline_images on messages (O17)")
+    hermes_sub.add_parser("run-status", help="GET /v1/runs/{run_id} (O17)")
+    hermes_sub.add_parser("events", help="GET /v1/runs/{run_id}/events (O17, names only)")
+    h_stop = hermes_sub.add_parser("stop", help="POST /v1/runs/{run_id}/stop (O17)")
+    h_stop.add_argument("--settle-seconds", type=float, default=argparse.SUPPRESS,
+                        help="how long to poll for a terminal status (this worker's own "
+                             "bound; O17 states no timeout)")
+    h_stop.add_argument("--settle-interval", type=float, default=argparse.SUPPRESS,
+                        help="seconds between two status polls (ours)")
+    h_approval = hermes_sub.add_parser(
+        "approval", help="POST /v1/runs/{run_id}/approval (refused without your body)")
+    h_approval.add_argument("--body-json", default=None,
+                            help="the approval request body, verbatim (no record names a "
+                                 "field of it, so the worker will not construct one)")
+    hermes_sub.add_parser("jobs", help="refused: /api/jobs is named on O17 with no purpose")
+    hermes_sub.add_parser("models", help="refused: /v1/models has no described purpose")
+    hermes_sub.add_parser("model-options",
+                          help="refused: /api/model/options has no described purpose")
+    hermes_sub.add_parser("responses",
+                          help="refused: GET|DELETE /v1/responses/{id}, no purpose given")
+    hermes_sub.add_parser("chat-completions",
+                          help="refused: O17 records Chat Completions as stateless")
+    hermes_sub.add_parser("session-mutations",
+                          help="refused: create/patch/delete/fork/chat are not reads")
+    h_probe = hermes_sub.add_parser("probe", help="emit the eight Hermes capability rows")
+    h_probe.add_argument("--submit-test-run", action="store_true", default=argparse.SUPPRESS,
+                         help="consent to exactly one trivial run on your gateway: the "
+                              "worker's own frozen constant, quoted in the row")
+    h_probe.add_argument("--terminal-backend", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    h_probe.add_argument("--approval-observation", default=argparse.SUPPRESS,
+                         choices=list(APPROVAL_OBSERVATIONS), help=argparse.SUPPRESS)
+    h_probe.add_argument("--hermes-version", default=argparse.SUPPRESS,
+                         help=argparse.SUPPRESS)
+    h_probe.add_argument("--settle-seconds", type=float, default=argparse.SUPPRESS,
+                         help="how long to poll a run to a terminal status (ours)")
+    h_probe.add_argument("--settle-interval", type=float, default=argparse.SUPPRESS,
+                         help="seconds between two status polls (ours)")
+    h_probe.add_argument("--out", default=None, help="also write the rows to this file")
+    h_probe.add_argument("--summary-to-stderr", action="store_true")
+    # The run-scoped and owner-supplied flags are also accepted *after* the nested action
+    # (`hermes events --run-id X`), which is how a runbook writes them. SUPPRESS keeps a
+    # flag given before the action from being reset by the copy on the action.
+    for nested, names in (
+            (hermes_sub.choices["events"], ("--run-id",)),
+            (hermes_sub.choices["stop"], ("--run-id",)),
+            (hermes_sub.choices["run-status"], ("--run-id",)),
+            (hermes_sub.choices["approval"], ("--run-id",)),
+            (hermes_sub.choices["session"], ("--session-id",)),
+            (hermes_sub.choices["session-messages"], ("--session-id",)),
+            (hermes_sub.choices["sessions"], ("--limit",)),
+            (hermes_sub.choices["probe"], ("--run-id", "--session-id", "--limit")),
+            (hermes_sub.choices["capabilities"], ("--token-env", "--profile")),
+            (hermes_sub.choices["token"], ("--token-env",))):
+        for name in names:
+            dest = name.lstrip("-").replace("-", "_")
+            existing = {a.dest for a in nested._actions}
+            if dest in existing:
+                continue
+            if name == "--limit":
+                nested.add_argument(name, type=int, default=argparse.SUPPRESS,
+                                    help="documented limit (O17)")
+            else:
+                nested.add_argument(name, default=argparse.SUPPRESS,
+                                    help="accepted after the action as well as before it")
     _add_global_flags_to_subparsers(sub)
     return parser
+
+
+def _hermes_scenario(args) -> str:
+    """The Hermes fixture scenario, tolerating the flag argparse may have nested.
+
+    ``--fixture-scenario`` is added to subcommands that lack it (``dest``
+    ``fixture_scenario``); the Hermes family binds its own name too. Only a value that is
+    actually a Hermes scenario is honoured, so a Mail, Beeper or Contacts scenario name can
+    never be reinterpreted as a recorded Hermes answer.
+    """
+    for name in ("hermes_fixture_scenario", "fixture_scenario"):
+        value = getattr(args, name, None)
+        if value in HERMES_FIXTURE_SCENARIOS:
+            return value
+    return "healthy"
+
+
+def _hermes_options(args) -> dict:
+    """Everything a Hermes probe run needs that it cannot discover for itself."""
+    return {
+        "run_id": getattr(args, "run_id", None),
+        "submit_test_run": bool(getattr(args, "submit_test_run", False)),
+        "terminal_backend": getattr(args, "terminal_backend", None),
+        "approval_observation": getattr(args, "approval_observation", None),
+        "version": getattr(args, "hermes_version", None),
+        "session_id": getattr(args, "session_id", None),
+        "limit": int(getattr(args, "limit", None) or 25),
+        "settle_seconds": getattr(args, "settle_seconds", None),
+        "settle_interval": getattr(args, "settle_interval", None),
+    }
+
+
+def _hermes_adapter(args):
+    """The Hermes read adapter, in fixture mode or against a real gateway. One place decides."""
+    return build_hermes_adapter(
+        fixture_mode=bool(getattr(args, "fixture_mode", False)),
+        fixture_scenario=_hermes_scenario(args),
+        base_url=getattr(args, "base_url", None),
+        timeout_s=int(getattr(args, "timeout", 10) or 10),
+        stand_in=bool(getattr(args, "stand_in_server", False)),
+        token_env=getattr(args, "token_env", None),
+        profile=getattr(args, "profile", None),
+        settle_seconds=float(getattr(args, "settle_seconds", None) or 20.0),
+        settle_interval=float(getattr(args, "settle_interval", None) or 0.5))
 
 
 def _adapter(args):
@@ -403,10 +600,12 @@ def _probe_adapters(args):
 
     One run, one row per capability key: the Mail adapter measures the Mail rows, the
     Beeper adapter measures the five Beeper rows it can, the Contacts adapter measures the
-    five Contacts rows it can, and a capability none of them can measure is reported as the
-    documentation read the pack records.
+    five Contacts rows it can, the Hermes adapter measures the eight Hermes rows it can (or
+    reports the typed state that stopped it), and a capability none of them can measure is
+    reported as the documentation read the pack records.
     """
-    adapters = [_adapter(args), _beeper_adapter(args), _contacts_adapter(args)]
+    adapters = [_adapter(args), _beeper_adapter(args), _contacts_adapter(args),
+                _hermes_adapter(args)]
     if getattr(args, "mail_only", False):
         return adapters[:1]
     return adapters
@@ -431,7 +630,8 @@ def cmd_probe(args) -> int:
                     beeper_account_id=getattr(args, "beeper_account_id", None),
                     beeper_ui_oldest_visible=getattr(args, "beeper_ui_oldest_visible",
                                                      None),
-                    contacts=_contacts_options(args))
+                    contacts=_contacts_options(args),
+                    hermes=_hermes_options(args))
     if args.out:
         with open(args.out, "w", encoding="utf-8") as handle:
             for row in run.rows:
@@ -662,6 +862,121 @@ def cmd_beeper(args) -> int:
     return EXIT_USAGE
 
 
+def cmd_hermes(args) -> int:
+    """The Hermes read family. Read-only, plus the one fenced submission.
+
+    Every command answers a typed state rather than raising: a refused ask (a name on O17
+    with no described purpose, a mutation, a parameter the pack does not document) exits 0
+    with ``unsupported`` and a smallest next action, exactly as a reachable-but-403 gateway
+    does. Exit 3 is reserved for the probe harness itself failing.
+    """
+    adapter = _hermes_adapter(args)
+    action = getattr(args, "hermes_command", None)
+    if action is None:
+        sys.stderr.write(
+            "usage: switchboard-mini hermes "
+            "token|capabilities|toolsets|skills|health|health-v1|sessions|session|"
+            "session-messages|run-status|events|stop|approval|jobs|models|model-options|"
+            "responses|chat-completions|session-mutations|probe\n")
+        return EXIT_USAGE
+    if action == "token":
+        _print(adapter.token_status().to_dict(), args.pretty)
+        return EXIT_OK
+    if action == "capabilities":
+        _print(adapter.capabilities().to_dict(), args.pretty)
+        return EXIT_OK
+    if action == "toolsets":
+        _print(adapter.toolsets().to_dict(), args.pretty)
+        return EXIT_OK
+    if action == "skills":
+        _print(adapter.skills().to_dict(), args.pretty)
+        return EXIT_OK
+    if action == "health":
+        _print(adapter.health(detailed=bool(getattr(args, "detailed", False))).to_dict(),
+               args.pretty)
+        return EXIT_OK
+    if action == "health-v1":
+        _print(adapter.health_v1().to_dict(), args.pretty)
+        return EXIT_OK
+    if action == "sessions":
+        params = {}
+        for name in ("limit", "offset", "source", "include_children"):
+            value = getattr(args, name, None)
+            if value is not None and value is not False:
+                params[name] = value
+        _print(adapter.sessions(**params).to_dict(), args.pretty)
+        return EXIT_OK
+    if action == "session":
+        _print(adapter.session(getattr(args, "session_id", None) or "").to_dict(),
+               args.pretty)
+        return EXIT_OK
+    if action == "session-messages":
+        params = {}
+        for name in ("include_compacted", "inline_images"):
+            if getattr(args, name, False):
+                params[name] = True
+        _print(adapter.session_messages(getattr(args, "session_id", None) or "",
+                                        **params).to_dict(), args.pretty)
+        return EXIT_OK
+    if action == "run-status":
+        _print(adapter.run_status(getattr(args, "run_id", None) or "").to_dict(),
+               args.pretty)
+        return EXIT_OK
+    if action == "events":
+        _print(adapter.run_events(getattr(args, "run_id", None) or "").to_dict(),
+               args.pretty)
+        return EXIT_OK
+    if action == "stop":
+        _print(adapter.stop(getattr(args, "run_id", None) or "").to_dict(), args.pretty)
+        return EXIT_OK
+    if action == "approval":
+        body = None
+        raw = getattr(args, "body_json", None)
+        if raw:
+            text = raw
+            if raw.startswith("@"):
+                with open(raw[1:], "r", encoding="utf-8") as handle:
+                    text = handle.read()
+            try:
+                body = json.loads(text)
+            except ValueError as exc:
+                sys.stderr.write(f"hermes approval: --body-json is not JSON: {exc}\n")
+                return EXIT_USAGE
+        _print(adapter.approval(getattr(args, "run_id", None) or "", body=body).to_dict(),
+               args.pretty)
+        return EXIT_OK
+    refusals = {"jobs": adapter.jobs, "models": adapter.models,
+                "model-options": adapter.model_options,
+                "responses": adapter.responses,
+                "chat-completions": adapter.chat_completions,
+                "session-mutations": adapter.session_mutation}
+    if action in refusals:
+        _print(refusals[action]().to_dict(), args.pretty)
+        return EXIT_OK
+    if action == "probe":
+        run = run_probe([adapter], only_source="hermes", hermes=_hermes_options(args))
+        if args.out:
+            with open(args.out, "w", encoding="utf-8") as handle:
+                for row in run.rows:
+                    handle.write(O.emit(row) + "\n")
+        for row in run.rows:
+            _line(row)
+        if getattr(args, "summary_to_stderr", False):
+            sys.stderr.write(O.emit({
+                "event": "probe_summary", "origin": adapter.origin,
+                "adapter_is_real": bool(adapter.adapter_is_real),
+                "adapter": adapter.name, "label": adapter._label(),
+                "frozen_probe_constant": PROBE_TEST_RUN_INPUT,
+                "submit_test_run": bool(getattr(args, "submit_test_run", False)),
+                **run.summary()}) + "\n")
+        if not run.ok:
+            sys.stderr.write(O.emit({"event": "probe_harness_errors",
+                                     "errors": run.harness_errors}) + "\n")
+            return EXIT_HARNESS_FAILURE
+        return EXIT_OK
+    return EXIT_USAGE
+
+
 def main(argv: Optional[list] = None) -> int:
     if not O.python_supported():
         sys.stderr.write("switchboard-mini needs Python 3.9 or newer; this is "
@@ -680,12 +995,18 @@ def main(argv: Optional[list] = None) -> int:
                 "standard_library_only": True,
                 "fixture_scenarios": list(FIXTURE_SCENARIOS),
                 "beeper_fixture_scenarios": list(BEEPER_FIXTURE_SCENARIOS),
-                "contacts_fixture_scenarios": list(CONTACTS_FIXTURE_SCENARIOS)}, args.pretty)
+                "contacts_fixture_scenarios": list(CONTACTS_FIXTURE_SCENARIOS),
+                "hermes_fixture_scenarios": list(HERMES_FIXTURE_SCENARIOS),
+                "hermes_token_env_default": HERMES_TOKEN_ENV,
+                "hermes_token_env_overridable_with": "--token-env NAME",
+                "hermes_never_read_paths": ["~/.hermes/.env", "~/.hermes/config.yaml"],
+                "hermes_run_submission": ("only the frozen probe constant, and only with "
+                                          "hermes probe --submit-test-run")}, args.pretty)
         return EXIT_OK
     handlers = {"probe": cmd_probe, "run": cmd_run, "health": cmd_health,
                 "accounts": cmd_accounts, "mailboxes": cmd_mailboxes, "list": cmd_list,
                 "fetch": cmd_fetch, "manifest": cmd_manifest, "beeper": cmd_beeper,
-                "contacts": cmd_contacts}
+                "contacts": cmd_contacts, "hermes": cmd_hermes}
     try:
         return handlers[args.command](args)
     except KeyboardInterrupt:
@@ -721,6 +1042,7 @@ def _report_harness_failure(args, exc: BaseException) -> int:
     return EXIT_HARNESS_FAILURE
 
 
-__all__ = ["main", "build_parser", "CAPABILITY_NAMES", "WORKER_VERSION",
+__all__ = ["main", "build_parser", "cmd_hermes", "CAPABILITY_NAMES",
+           "WORKER_VERSION",
            "harness_failure_document", "FIXTURE_SCENARIOS", "BEEPER_FIXTURE_SCENARIOS",
            "cmd_beeper"]

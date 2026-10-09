@@ -47,6 +47,7 @@ probe run -- that is the whole point of probing.
 
 from __future__ import annotations
 
+import time
 import traceback
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
@@ -259,7 +260,8 @@ class ProbeContext:
                  mailbox: Optional[str] = None, max_scan: int = 2000,
                  beeper_account_id: Optional[str] = None,
                  beeper_ui_oldest_visible: Optional[str] = None,
-                 contacts: Optional[dict] = None):
+                 contacts: Optional[dict] = None,
+                 hermes: Optional[dict] = None):
         # One run may carry several adapters: the Mail adapter measures the Mail rows and
         # the Beeper adapter measures the Beeper rows, so one probe run produces exactly
         # one row per capability key and a documentation row is only ever emitted for a
@@ -284,6 +286,12 @@ class ProbeContext:
         # key symbol the owner read from the SDK header, the file a two-run identifier
         # comparison uses). They are passed in as data so one Context serves every source.
         self._contacts = dict(contacts or {})
+        # The Hermes reads take parameters a probe run does not discover either: a run id
+        # the owner names, the explicit consent to create the probe's own frozen run, the
+        # owner's own `terminal.backend` value, his observation of the approval path, and
+        # the version string only he can read. Passed as data so one Context serves every
+        # source and so no row has to invent one.
+        self._hermes = dict(hermes or {})
         self._memo: dict = {}
         self.harness_errors: list = []
 
@@ -310,6 +318,34 @@ class ProbeContext:
 
     def contacts_limit(self) -> int:
         return int(self._contacts.get("limit") or 25)
+    # -- the Hermes parameters ---------------------------------------------
+    def hermes_run_id(self) -> Optional[str]:
+        """The run the run-scoped rows act on: the owner names it, or the probe created
+        its own frozen run. Never an invented id."""
+        return self._hermes.get("run_id")
+    def hermes_submit_test_run(self) -> bool:
+        """Explicit consent for the one run this worker may ever create."""
+        return bool(self._hermes.get("submit_test_run"))
+    def hermes_terminal_backend(self) -> Optional[str]:
+        return self._hermes.get("terminal_backend")
+    def hermes_approval_observation(self) -> Optional[str]:
+        return self._hermes.get("approval_observation")
+    def hermes_version(self) -> Optional[str]:
+        return self._hermes.get("version")
+    def hermes_session_id(self) -> Optional[str]:
+        return self._hermes.get("session_id")
+    def hermes_session_limit(self) -> int:
+        return int(self._hermes.get("limit") or 25)
+    def hermes_settle_seconds(self) -> float:
+        from .hermes_transport import DEFAULT_SETTLE_SECONDS
+        return float(self._hermes.get("settle_seconds") or DEFAULT_SETTLE_SECONDS)
+    def hermes_settle_interval(self) -> float:
+        from .hermes_transport import DEFAULT_SETTLE_INTERVAL
+        return float(self._hermes.get("settle_interval") or DEFAULT_SETTLE_INTERVAL)
+    def hermes_sleep(self, seconds: float) -> None:
+        # The probe's own wait between two status polls. Overridable so a test drives the
+        # settling path without waiting.
+        self._hermes.get("sleep", time.sleep)(seconds)
 
     # -- memoized reads ----------------------------------------------------
     def _once(self, key: str, call: Callable[[], Any]) -> Any:
@@ -1170,6 +1206,7 @@ def run_probe(adapter, *, sample: int = 5, account: Optional[str] = None,
               beeper_account_id: Optional[str] = None,
               beeper_ui_oldest_visible: Optional[str] = None,
               contacts: Optional[dict] = None,
+              hermes: Optional[dict] = None,
               only_source: Optional[str] = None) -> ProbeRun:
     """Produce one row per capability. Never raises for an unsupported capability.
 
@@ -1180,7 +1217,7 @@ def run_probe(adapter, *, sample: int = 5, account: Optional[str] = None,
     context = ProbeContext(adapter, sample=sample, account=account, mailbox=mailbox,
                            max_scan=max_scan, beeper_account_id=beeper_account_id,
                            beeper_ui_oldest_visible=beeper_ui_oldest_visible,
-                           contacts=contacts)
+                           contacts=contacts, hermes=hermes)
     run = ProbeRun()
     for capability in CAPABILITIES:
         if only_source and capability.source != only_source:

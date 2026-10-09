@@ -1,0 +1,220 @@
+{
+ "scenario": "healthy",
+ "label": "FIXTURE:hermes('healthy' recorded scenario)",
+ "recorded_from": "a Hermes API server (O17) as described by the probe pack; recorded by hand for this repository, not captured from Randy's install",
+ "note": "Everything the documented read surface offers answered on the recorded run: the capability document with its features map, the toolset and skill surfaces, health, one session listing and read-back, a run that starts, replays under the same Idempotency-Key and settles as completed, an event stream that ends with run.completed, and a stop that answers {\"status\": \"stopping\"} before the run settles.",
+ "disclaimer": "A recorded result, not a live connection: this file holds what a read returned when it was recorded, so the worker's parsing, refusals and row contract can be exercised on a host that has no Hermes gateway. Every document built from it is labelled FIXTURE: and can never claim a real source. No token value is stored here: only whether a key was configured.",
+ "base_url": "http://127.0.0.1:8642",
+ "token_present": true,
+ "token_env": "API_SERVER_KEY",
+ "responses": {
+  "capabilities": {
+   "status": 200,
+   "json": {
+    "object": "hermes.api_server.capabilities",
+    "platform": "darwin",
+    "model": "hermes-4-70b",
+    "auth": {
+     "type": "bearer",
+     "required": true
+    },
+    "features": {
+     "chat_completions": true,
+     "responses_api": true,
+     "run_submission": true,
+     "run_status": true,
+     "run_events_sse": true,
+     "run_stop": true,
+     "reasoning_streaming": false,
+     "session_key_header": "X-Hermes-Session-Key",
+     "run_approval": true
+    }
+   }
+  },
+  "toolsets": {
+   "status": 200,
+   "json": {
+    "toolsets": [
+     {
+      "name": "terminal",
+      "label": "Terminal",
+      "description": "Run shell commands",
+      "enabled": true,
+      "configured": true,
+      "tools": [
+       "bash",
+       "read_file",
+       "write_file"
+      ]
+     },
+     {
+      "name": "browser",
+      "label": "Browser",
+      "description": "Drive a browser",
+      "enabled": true,
+      "configured": false,
+      "tools": [
+       "browser_navigate",
+       "browser_snapshot"
+      ]
+     },
+     {
+      "name": "memory",
+      "label": "Memory",
+      "description": "Long-term memory",
+      "enabled": false,
+      "configured": false,
+      "tools": []
+     }
+    ]
+   }
+  },
+  "skills": {
+   "status": 200,
+   "json": {
+    "skills": [
+     {
+      "name": "web-research",
+      "label": "Web research"
+     },
+     {
+      "name": "summarise",
+      "label": "Summarise"
+     }
+    ]
+   }
+  },
+  "health": {
+   "status": 200,
+   "json": {
+    "status": "ok"
+   }
+  },
+  "health_v1": {
+   "status": 200,
+   "json": {
+    "status": "ok"
+   }
+  },
+  "health_detailed": {
+   "status": 200,
+   "json": {
+    "status": "ok",
+    "readiness": {
+     "checks": [
+      {
+       "name": "session_db",
+       "status": "ok"
+      },
+      {
+       "name": "model",
+       "status": "ok"
+      }
+     ]
+    }
+   }
+  },
+  "sessions": {
+   "status": 200,
+   "json": {
+    "sessions": [
+     {
+      "id": "recorded-session-1",
+      "title": "Recorded session one",
+      "Parent session ID": null,
+      "started_at": "2026-10-01T09:00:00Z",
+      "ended_at": null,
+      "source platform": "api-server",
+      "user ID": "recorded-user"
+     },
+     {
+      "id": "recorded-session-2",
+      "title": "Recorded session two",
+      "Parent session ID": "recorded-session-1",
+      "started_at": "2026-10-01T10:00:00Z",
+      "ended_at": "2026-10-01T10:05:00Z",
+      "source platform": "cli",
+      "user ID": "recorded-user"
+     }
+    ]
+   }
+  },
+  "session": {
+   "status": 200,
+   "json": {
+    "id": "recorded-session-1",
+    "title": "Recorded session one",
+    "Parent session ID": null,
+    "started_at": "2026-10-01T09:00:00Z",
+    "ended_at": null,
+    "source platform": "api-server",
+    "user ID": "recorded-user"
+   }
+  },
+  "session_messages": {
+   "status": 200,
+   "json": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "[recorded fixture: message text withheld]"
+     },
+     {
+      "role": "assistant",
+      "content": "[recorded fixture: message text withheld]"
+     }
+    ]
+   }
+  },
+  "run": {
+   "status": 200,
+   "json": {
+    "object": "hermes.run",
+    "run_id": "recorded-run-1",
+    "status": "completed",
+    "session_id": "recorded-session-1",
+    "model": "hermes-4-70b",
+    "output": "[recorded fixture: run output withheld]",
+    "usage": {
+     "tokens": 0
+    },
+    "runtime": {
+     "seconds": 1.5
+    }
+   }
+  },
+  "run_submit": [
+   {
+    "status": 200,
+    "json": {
+     "object": "hermes.run",
+     "run_id": "recorded-run-1",
+     "status": "started",
+     "session_id": null
+    }
+   },
+   {
+    "status": 202,
+    "headers": {
+     "Idempotency-Replayed": "true"
+    },
+    "json": {
+     "object": "hermes.run",
+     "run_id": "recorded-run-1",
+     "status": "started",
+     "session_id": null
+    }
+   }
+  ],
+  "run_events": {
+   "status": 200,
+   "stream": "event: tool.started\ndata: {\"type\": \"tool.started\", \"tool\": \"bash\"}\n\nevent: tool.completed\ndata: {\"type\": \"tool.completed\", \"error\": false}\n\nevent: message.delta\ndata: {\"type\": \"message.delta\"}\n\nevent: run.completed\ndata: {\"type\": \"run.completed\", \"status\": \"completed\"}\n\n"
+  },
+  "run_stop": {
+   "status": 200,
+   "json": {
+    "status": "stopping"
+   }
+  }
+ }
+}

@@ -1,0 +1,16 @@
+{
+ "scenario": "gateway_down",
+ "label": "FIXTURE:hermes('gateway_down' recorded scenario)",
+ "recorded_from": "a Hermes API server (O17) as described by the probe pack; recorded by hand for this repository, not captured from Randy's install",
+ "note": "The recorded run had nothing listening at the API base URL: the connection was refused. No request was served and no gateway was reached.",
+ "disclaimer": "A recorded result, not a live connection: this file holds what a read returned when it was recorded, so the worker's parsing, refusals and row contract can be exercised on a host that has no Hermes gateway. Every document built from it is labelled FIXTURE: and can never claim a real source. No token value is stored here: only whether a key was configured.",
+ "base_url": "http://127.0.0.1:8642",
+ "token_present": true,
+ "token_env": "API_SERVER_KEY",
+ "responses": {},
+ "fault": {
+  "kind": "connection_refused",
+  "applies_to": "*",
+  "detail": "connection refused at http://127.0.0.1:8642"
+ }
+}
