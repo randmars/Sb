@@ -289,7 +289,10 @@ class TestEveryCommandFixtureMode(CliCaseMixin, unittest.TestCase):
                 self.assertFalse(row["adapter_is_real"])
                 self.assertFalse(row["real_source_connected"])
                 self.assertTrue(O.is_fixture_label(row["label"]))
-                self.assertIn("No Mail.app was contacted", row["disclaimer"])
+                # A fixture disclaimer names the source it did *not* contact: the Mail rows
+                # say Mail, the Beeper adapter's recorded rows say Beeper Desktop.
+                expected = "Beeper Desktop" if row["source"] == "beeper" else "Mail.app"
+                self.assertIn(f"No {expected} was contacted", row["disclaimer"])
         for row in documented:
             # Recorded fixtures answer ``fixture``; the pack rows contacted nothing at all on
             # any host, so they are ``documentation`` -- and never supported.
@@ -393,8 +396,13 @@ class TestFlagPositions(unittest.TestCase):
         # asserted separately; every row this machine actually produced is a labelled fixture.
         fixture_origins = [r["origin"] for r in rows_after if r["origin"] != O.DOCUMENTATION]
         self.assertEqual(fixture_origins, [O.FIXTURE] * len(fixture_origins))
+        # The Beeper adapter is in this run, so its four rows are measured (as fixtures,
+        # never supported); only the sources with no adapter in the worker -- Contacts and
+        # Hermes -- are still documentation reads.
+        self.assertTrue(all(r["origin"] == O.FIXTURE for r in rows_after
+                            if r["source"] == "beeper"))
         self.assertTrue(all(r["origin"] == O.DOCUMENTATION for r in rows_after
-                            if r["source"] != "mail"))
+                            if r["source"] not in ("mail", "beeper")))
         self.assertEqual([r["state"] for r in rows_before],
                          [r["state"] for r in rows_after])
 

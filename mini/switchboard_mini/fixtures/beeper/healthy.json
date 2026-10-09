@@ -1,0 +1,124 @@
+{
+  "scenario": "healthy",
+  "note": "Synthetic recording written by the Switchboard team to exercise the Beeper read adapter. It is NOT a capture of Randy's Beeper Desktop and it proves nothing about his install. The /v1/info key names below are invented here, because no page in the probe pack documents the shape of that document (O11 says only that it returns server metadata and exposes endpoint URLs); the message-search and contact field names are the ones documented on O06 and O12. No token value is stored in this file or in any other fixture.",
+  "label": "FIXTURE:beeper(recorded scenario 'healthy')",
+  "base_url": "http://localhost:23373",
+  "token_present": true,
+  "host_platform": "fixture-macos",
+  "responses": {
+    "introspect": {
+      "status": 200,
+      "json": {"active": true, "scope": "fixture-scope-not-documented"}
+    },
+    "info": {
+      "status": 200,
+      "json": {
+        "version": "0.0.0-fixture",
+        "endpoints": ["/v1/messages/search", "/v1/accounts/{accountID}/contacts/list"],
+        "accounts_referenced": 1
+      }
+    },
+    "search": {
+      "first": {
+        "status": 200,
+        "json": {
+          "items": [
+            {
+              "id": "fix-msg-0001",
+              "accountID": "fix-account-A",
+              "chatID": "fix-chat-A1",
+              "senderID": "fix-network:fix-user-1",
+              "senderName": "Alex Rivera",
+              "sortKey": "fix-sort-0003",
+              "timestamp": "2026-09-30T18:04:11Z",
+              "text": "FIXTURE: synthetic message text, not a real message",
+              "type": "TEXT",
+              "attachments": [],
+              "sendStatus": {"status": "SUCCESS", "timestamp": "2026-09-30T18:04:12Z"}
+            },
+            {
+              "id": "fix-msg-0002",
+              "accountID": "fix-account-A",
+              "chatID": "fix-chat-A1",
+              "senderID": "fix-network:fix-user-2",
+              "senderName": "Sam Okafor",
+              "sortKey": "fix-sort-0002",
+              "timestamp": "2026-09-30T17:51:02Z",
+              "text": "FIXTURE: synthetic message text, not a real message",
+              "type": "TEXT",
+              "attachments": [
+                {"type": "img", "id": "fix-attachment-1", "mimeType": "image/png",
+                 "fileName": "fix-fixture.png", "fileSize": 1234, "srcURL": null}
+              ]
+            }
+          ],
+          "chats": {
+            "fix-chat-A1": {
+              "id": "fix-chat-A1",
+              "accountID": "fix-account-A",
+              "network": "Fixture Network",
+              "title": "Alex Rivera",
+              "type": "single",
+              "unreadCount": 0,
+              "localChatID": "fix-local-1"
+            }
+          },
+          "hasMore": true,
+          "newestCursor": "fix-cursor-newer-page1",
+          "oldestCursor": "fix-cursor-older-page1"
+        }
+      },
+      "cursor": {
+        "status": 200,
+        "json": {
+          "items": [
+            {
+              "id": "fix-msg-0003",
+              "accountID": "fix-account-A",
+              "chatID": "fix-chat-A2",
+              "senderID": "fix-network:fix-user-1",
+              "senderName": "Alex Rivera",
+              "sortKey": "fix-sort-0001",
+              "timestamp": "2026-09-28T09:12:44Z",
+              "text": "FIXTURE: synthetic message text, not a real message",
+              "type": "TEXT",
+              "attachments": []
+            }
+          ],
+          "chats": {
+            "fix-chat-A2": {
+              "id": "fix-chat-A2",
+              "accountID": "fix-account-A",
+              "network": "Fixture Network",
+              "title": "Fixture Group",
+              "type": "group"
+            }
+          },
+          "hasMore": false,
+          "newestCursor": "fix-cursor-newer-page2",
+          "oldestCursor": "fix-cursor-older-page2"
+        }
+      }
+    },
+    "contacts": {
+      "status": 200,
+      "json": {
+        "items": [
+          {
+            "id": "fix-contact-1",
+            "cannotMessage": false,
+            "email": "alex.rivera@example.com",
+            "fullName": "Alex Rivera",
+            "imgURL": null,
+            "isSelf": false,
+            "phoneNumber": "+1 555 0100 001",
+            "username": "alex.rivera"
+          }
+        ],
+        "hasMore": false,
+        "newestCursor": "fix-contact-cursor-new",
+        "oldestCursor": "fix-contact-cursor-old"
+      }
+    }
+  }
+}

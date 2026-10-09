@@ -62,7 +62,7 @@ ROW_FIELDS = ("capability", "supported", "permission_state", "observed_version",
 ROW_LABELLING_FIELDS = ("state", "origin", "label", "disclaimer", "probed_at",
                         "title", "values_from_source", "adapter_is_real",
                         "real_source_connected", "probe_contract_version",
-                        "source", "citations", "observed_version_reason")
+                        "source", "citations", "observed_version_reason", "supersedes")
 
 
 @dataclass(frozen=True)
@@ -255,19 +255,42 @@ class ProbeContext:
     """Runs each underlying read at most once per probe run and remembers the outcome."""
 
     def __init__(self, adapter, *, sample: int = 5, account: Optional[str] = None,
-                 mailbox: Optional[str] = None, max_scan: int = 2000):
-        self.adapter = adapter
+                 mailbox: Optional[str] = None, max_scan: int = 2000,
+                 beeper_account_id: Optional[str] = None,
+                 beeper_ui_oldest_visible: Optional[str] = None):
+        # One run may carry several adapters: the Mail adapter measures the Mail rows and
+        # the Beeper adapter measures the Beeper rows, so one probe run produces exactly
+        # one row per capability key and a documentation row is only ever emitted for a
+        # capability no adapter in the run can measure (see ``_handler_for``).
+        adapters = list(adapter) if isinstance(adapter, (list, tuple)) else [adapter]
+        if not adapters:
+            raise ValueError("a probe run needs at least one adapter")
+        self.adapters = {getattr(a, "name", type(a).__name__): a for a in adapters}
+        self.adapter = adapters[0]
         self.sample = max(1, int(sample))
         self.max_scan = max_scan
-        self.origin = adapter.origin
-        # The provenance of the adapter itself, read once: a fixture twin can never make a
-        # row claim a real source, whatever the fixture file says.
-        self.adapter_is_real = bool(getattr(adapter, "adapter_is_real", False))
-        self.label = getattr(adapter, "_label", lambda: None)()
+        self.origin = self.adapter.origin
+        # The provenance of the primary adapter, read once: a fixture twin can never make
+        # a row claim a real source, whatever the fixture file says.
+        self.adapter_is_real = bool(getattr(self.adapter, "adapter_is_real", False))
+        self.label = getattr(self.adapter, "_label", lambda: None)()
         self._account_arg = account
         self._mailbox_arg = mailbox
+        self._beeper_account_id = beeper_account_id
+        self._beeper_ui_oldest = beeper_ui_oldest_visible
         self._memo: dict = {}
         self.harness_errors: list = []
+
+    # -- the other adapters in this run ------------------------------------
+    def for_source(self, source: str):
+        """The adapter that measures ``source`` in this run, or None if it is absent."""
+        return self.adapters.get(source)
+
+    def beeper_account_id(self) -> Optional[str]:
+        return self._beeper_account_id
+
+    def beeper_ui_oldest_visible(self) -> Optional[str]:
+        return self._beeper_ui_oldest
 
     # -- memoized reads ----------------------------------------------------
     def _once(self, key: str, call: Callable[[], Any]) -> Any:
@@ -380,7 +403,8 @@ def _row(context: ProbeContext, capability: Capability, *, supported: bool, stat
          observed_version_reason: Optional[str] = None,
          values_from_source: Optional[bool] = None,
          origin: Optional[str] = None, adapter_is_real: Optional[bool] = None,
-         citations: Optional[tuple] = None) -> dict:
+         citations: Optional[tuple] = None, label: Optional[str] = None,
+         supersedes: Optional[dict] = None) -> dict:
     """Build one row, enforcing the rules that keep a row from over-claiming.
 
     ``observed_version`` is **never** defaulted from another row's read: a caller that
@@ -444,12 +468,18 @@ def _row(context: ProbeContext, capability: Capability, *, supported: bool, stat
             and (state in (O.SUCCESS, O.PARTIAL)
                  if values_from_source is None else bool(values_from_source))),
     }
+    row["supersedes"] = dict(supersedes) if supersedes else None
+    if row["supersedes"] is not None and row["citations"]:
+        raise ValueError(
+            f"probe row {capability.name!r}: a row that supersedes a documentation read is "
+            "a measurement, and a measurement quotes no page — the pack refs belong in "
+            "`supersedes.citations`")
     if row["origin"] != O.REAL:
         if row["origin"] == O.DOCUMENTATION:
             row["label"] = O.documentation_label(capability.source, row_cites)
         else:
-            row["label"] = context.label or O.fixture_label("mail")
-        row["disclaimer"] = O.disclaimer_for(row["origin"])
+            row["label"] = label or context.label or O.fixture_label(capability.source)
+        row["disclaimer"] = O.disclaimer_for(row["origin"], source=capability.source)
     else:
         row["label"] = None
         row["disclaimer"] = None
@@ -467,7 +497,10 @@ def _permission_for(outcome: O.Outcome) -> str:
 
 
 def _blocked_row(context: ProbeContext, capability: Capability, outcome: O.Outcome,
-                 extra: Optional[dict] = None) -> dict:
+                 extra: Optional[dict] = None, *, origin: Optional[str] = None,
+                 adapter_is_real: Optional[bool] = None,
+                 label: Optional[str] = None,
+                 supersedes: Optional[dict] = None) -> dict:
     evidence = dict(outcome.data or {})          # e.g. the Apple event code and message
     evidence.update({
         "outcome_code": outcome.code,
@@ -482,7 +515,8 @@ def _blocked_row(context: ProbeContext, capability: Capability, outcome: O.Outco
                 permission_state=_permission_for(outcome),
                 limitation=(f"{capability.limitation} — " if capability.limitation else "")
                            + (outcome.detail or outcome.code),
-                evidence=evidence)
+                evidence=evidence, origin=origin, adapter_is_real=adapter_is_real,
+                label=label, supersedes=supersedes, citations=())
 
 
 # ------------------------------------------------------------- per capability --
@@ -992,10 +1026,13 @@ class ProbeRun:
             sources[row.get("source")] = sources.get(row.get("source"), 0) + 1
             if row.get("origin") == O.DOCUMENTATION:
                 documented.append(row["capability"])
+        superseding = [r["capability"] for r in self.rows if r.get("supersedes")]
         return {"capabilities": len(self.rows), "supported": supported,
                 "unsupported": unsupported, "states": states,
                 "permission_states": permissions,
                 "sources": sources,
+                "superseding_rows": superseding,
+                "documentation_rows_superseded_by_a_measurement": superseding,
                 "documentation_rows": documented,
                 "documentation_rows_are_never_supported": not any(
                     r["supported"] for r in self.rows
@@ -1003,15 +1040,79 @@ class ProbeRun:
                 "harness_errors": len(self.harness_errors)}
 
 
+def _handler_for(context: ProbeContext, capability: Capability):
+    """Which handler measures this capability in this run?
+
+    An adapter that declares the capability in ``measured_capabilities()`` and provides a
+    handler for it wins; otherwise the default registry answers (the Mail probes for the
+    Mail rows, ``_probe_documented`` for a capability whose documentation is all the pack
+    has). That is the rule that keeps a measured row and its documentation row from both
+    being emitted for one capability key.
+    """
+    for adapter in context.adapters.values():
+        measured = getattr(adapter, "measured_capabilities", None)
+        handlers = getattr(adapter, "probe_handlers", None)
+        if not callable(measured) or not callable(handlers):
+            continue
+        if capability.name not in set(measured()):
+            continue
+        handler = (handlers() or {}).get(capability.name)
+        if handler is not None:
+            return handler
+    return _PROBES[capability.name]
+
+
+def row_coexistence_problems(rows: list) -> list:
+    """Why this set of rows may not be imported as a probe run.
+
+    One row per capability key, and a documentation row may never sit beside the
+    measurement that superseded it: two rows for one capability with different origins
+    would let a reader (or an importer) treat a page read as a measurement, or the other
+    way round.
+    """
+    problems: list = []
+    seen: dict = {}
+    for row in rows:
+        name = row.get("capability") or row.get("name")
+        origin = row.get("origin")
+        if name in seen:
+            problems.append(f"two rows for capability {name!r} in one run: "
+                            f"{seen[name]!r} and {origin!r}")
+        else:
+            seen[name] = origin
+        if row.get("supported") and origin == O.DOCUMENTATION:
+            problems.append(f"{name}: a documentation row may never be supported=true")
+    superseding = {r.get("capability") for r in rows if r.get("supersedes")}
+    documented = {r.get("capability") for r in rows if r.get("origin") == O.DOCUMENTATION}
+    for name in sorted(superseding & documented):
+        problems.append(f"{name}: a measured row and the documentation row it supersedes "
+                        "are both in this run")
+    return problems
+
+
 def run_probe(adapter, *, sample: int = 5, account: Optional[str] = None,
-              mailbox: Optional[str] = None, max_scan: int = 2000) -> ProbeRun:
-    """Produce one row per capability. Never raises for an unsupported capability."""
+              mailbox: Optional[str] = None, max_scan: int = 2000,
+              beeper_account_id: Optional[str] = None,
+              beeper_ui_oldest_visible: Optional[str] = None,
+              only_source: Optional[str] = None) -> ProbeRun:
+    """Produce one row per capability. Never raises for an unsupported capability.
+
+    ``adapter`` may be one adapter or a list of them: each capability is measured by the
+    adapter that owns its source, and a capability no adapter in the run can measure is
+    reported as the documentation read it is.
+    """
     context = ProbeContext(adapter, sample=sample, account=account, mailbox=mailbox,
-                           max_scan=max_scan)
+                           max_scan=max_scan, beeper_account_id=beeper_account_id,
+                           beeper_ui_oldest_visible=beeper_ui_oldest_visible)
     run = ProbeRun()
     for capability in CAPABILITIES:
+        if only_source and capability.source != only_source:
+            # `only_source` keeps a single-source run (the `beeper probe` subcommand) from
+            # handing another source's rows to this adapter: a Mail row measured by a
+            # Beeper adapter would be a fabricated measurement.
+            continue
         try:
-            run.rows.append(_PROBES[capability.name](context, capability))
+            run.rows.append(_handler_for(context, capability)(context, capability))
         except Exception as exc:      # harness failure: reported as a row AND a non-zero exit
             trace = traceback.format_exc(limit=4)
             context.harness_errors.append({"capability": capability.name,
@@ -1025,4 +1126,9 @@ def run_probe(adapter, *, sample: int = 5, account: Optional[str] = None,
                        limitation=f"the probe harness failed: {type(exc).__name__}: {exc}",
                        evidence={"traceback_tail": trace.splitlines()[-6:]})
             run.rows.append(row)
+    for problem in row_coexistence_problems(run.rows):
+        # A worker defect, not a source state: reported as a harness failure so the run
+        # cannot be imported as a measurement.
+        run.harness_errors.append({"capability": "row_coexistence",
+                                   "exception": "RowCoexistence", "message": problem})
     return run

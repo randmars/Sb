@@ -1,0 +1,67 @@
+{
+  "scenario": "history_limited",
+  "note": "Synthetic recording: every recorded search page answers hasMore=true and carries one old message, so a bounded sweep never reaches the end of the reachable history. This is the recorded shape of O05's documented limitation ('Message history might be limited. Beeper indexes your messages from the networks in the background, when you first add an account, only recent messages might be available.') and it is what forces the adapter to report partial coverage instead of asserting completeness. It is NOT a capture of Randy's Beeper Desktop. No token value is stored in this file or in any other fixture.",
+  "label": "FIXTURE:beeper(recorded scenario 'history_limited')",
+  "base_url": "http://localhost:23373",
+  "token_present": true,
+  "host_platform": "fixture-macos",
+  "responses": {
+    "introspect": {"status": 200, "json": {"active": true}},
+    "info": {
+      "status": 200,
+      "json": {"version": "0.0.0-fixture", "endpoints": ["/v1/messages/search"]}
+    },
+    "search": {
+      "first": {
+        "status": 200,
+        "json": {
+          "items": [
+            {
+              "id": "fix-msg-1001",
+              "accountID": "fix-account-A",
+              "chatID": "fix-chat-A1",
+              "senderID": "fix-network:fix-user-1",
+              "senderName": "Alex Rivera",
+              "sortKey": "fix-sort-1001",
+              "timestamp": "2026-09-29T10:00:00Z",
+              "text": "FIXTURE: synthetic message text, not a real message",
+              "type": "TEXT",
+              "attachments": []
+            }
+          ],
+          "chats": {},
+          "hasMore": true,
+          "newestCursor": "fix-cursor-newer-p1",
+          "oldestCursor": "fix-cursor-older-p1"
+        }
+      },
+      "cursor": {
+        "status": 200,
+        "json": {
+          "items": [
+            {
+              "id": "fix-msg-1002",
+              "accountID": "fix-account-A",
+              "chatID": "fix-chat-A1",
+              "senderID": "fix-network:fix-user-1",
+              "senderName": "Alex Rivera",
+              "sortKey": "fix-sort-1002",
+              "timestamp": "2026-08-01T10:00:00Z",
+              "text": "FIXTURE: synthetic message text, not a real message",
+              "type": "TEXT",
+              "attachments": []
+            }
+          ],
+          "chats": {},
+          "hasMore": true,
+          "newestCursor": "fix-cursor-newer-p2",
+          "oldestCursor": "fix-cursor-older-p2"
+        }
+      }
+    },
+    "contacts": {
+      "status": 200,
+      "json": {"items": [], "hasMore": false, "newestCursor": "c-new", "oldestCursor": "c-old"}
+    }
+  }
+}

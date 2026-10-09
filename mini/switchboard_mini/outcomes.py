@@ -75,6 +75,17 @@ FIXTURE_DISCLAIMER = (
     "--fixture-mode. No Mail.app was contacted and no mailbox was read; these are not "
     "observations of any real mailbox or account."
 )
+#: A recorded read is labelled for the source it would have read. The Mail wording is the
+#: default because it came first; a Beeper fixture must not claim no *Mail* was contacted
+#: and say nothing about Beeper Desktop.
+FIXTURE_DISCLAIMER_BY_SOURCE = {
+    "beeper": (
+        "FIXTURE — answered from a recorded result shipped in this repository in "
+        "--fixture-mode. No Beeper Desktop was contacted and no chat, message or contact "
+        "was read; these are not observations of any real Beeper install."
+    ),
+}
+
 DOCUMENTATION_DISCLAIMER = (
     "DOCUMENTATION — recorded from a public reference page in the Gate 2 probe pack, not "
     "from this machine or Randy's. No source was contacted by this row and no capability "
@@ -106,10 +117,15 @@ def is_documentation_label(value: Any) -> bool:
     return isinstance(value, str) and value.startswith(DOCUMENTATION_LABEL_PREFIX)
 
 
-def disclaimer_for(origin: str) -> Optional[str]:
+def fixture_disclaimer(source: Optional[str] = None) -> str:
+    """The fixture disclaimer for a source: it must name the source it did *not* contact."""
+    return FIXTURE_DISCLAIMER_BY_SOURCE.get(source or "", FIXTURE_DISCLAIMER)
+
+
+def disclaimer_for(origin: str, source: Optional[str] = None) -> Optional[str]:
     """The one disclaimer for each non-real origin. Never a real-source claim."""
     if origin == FIXTURE:
-        return FIXTURE_DISCLAIMER
+        return fixture_disclaimer(source)
     if origin == DOCUMENTATION:
         return DOCUMENTATION_DISCLAIMER
     return REAL_DISCLAIMER
@@ -363,7 +379,7 @@ class Outcome:
         }
         if not self.is_real:
             payload["label"] = self.label or fixture_label(self.adapter or "mini")
-            payload["disclaimer"] = FIXTURE_DISCLAIMER
+            payload["disclaimer"] = fixture_disclaimer(self.adapter)
         if self.origin not in (REAL, FIXTURE):
             raise AssertionError(f"Outcome.to_dict: origin must be {REAL!r} or {FIXTURE!r}, "
                                  f"got {self.origin!r}")

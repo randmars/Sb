@@ -194,7 +194,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="store one Mini capability-probe run (Gate 2) against an account, refusing any "
              "row that over-claims")
     pi.add_argument("--file", required=True,
-                    help="a JSON document with a 'rows' list (switchboard-mini probe --json)")
+                    help="a JSON document with a 'rows' list. The Mini worker writes "
+                         "JSONL, one row per line: `switchboard-mini probe --account "
+                         "<label> --out rows.jsonl` — there is no `--json` flag. Wrap it "
+                         "before importing: `jq -s '{rows: .}' rows.jsonl > rows.json`")
     pi.add_argument("--account", required=True, help="the source_account_id these rows describe")
     pi.add_argument("--actor", default="probe-import")
 

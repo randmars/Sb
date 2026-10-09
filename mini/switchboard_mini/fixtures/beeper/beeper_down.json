@@ -1,0 +1,14 @@
+{
+  "scenario": "beeper_down",
+  "note": "Synthetic recording: the recorded run had a token configured and nothing was listening on the recorded base URL, so every read was refused with a connection error. O05 documents the precondition this reproduces ('Beeper Desktop API runs inside Beeper Desktop and requires Beeper Desktop to be running to be accessible'). It is NOT a capture of Randy's Mac. No token value is stored in this file or in any other fixture.",
+  "label": "FIXTURE:beeper(recorded scenario 'beeper_down')",
+  "base_url": "http://localhost:23373",
+  "token_present": true,
+  "host_platform": "fixture-macos",
+  "fault": {
+    "kind": "connection_refused",
+    "applies_to": "*",
+    "detail": "FIXTURE: recorded connection-refused result for the Beeper Desktop API"
+  },
+  "responses": {}
+}
