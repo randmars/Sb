@@ -59,7 +59,7 @@ source; where it has not, the product shows an explicit typed state.*
 |---|---|---|
 | Grace service, ledger, approvals, effects, rules, ingest | **Executed for real here** — real SQLite, real transactions, real process restarts | — |
 | CLI and its JSON output | **Executed for real here** | — |
-| Test suite (`tests/`, 466 tests) | **Executed for real here** (all pass) | — |
+| Test suite (`tests/`, 505 tests) | **Executed for real here** (all pass) | — |
 | Grace-side source adapters | **Mock only** (`MockMailAdapter`, `MockBeeperAdapter`, `MockContactsAdapter`, `MockHermesAdapter` in `grace/adapters.py`), labelled `MOCK:`. The Mini worker **does** now ship real read-only Mail, Beeper, Contacts and Hermes adapters — see the Mini row below | Permissions, versions, latency and the capability manifests the real adapters return (PRD §11, §14 Gate 2) |
 | Agent runs (the "MOCK worker pass") | **Simulated**; produces a labelled draft, never an external message | Real Hermes sessions/runs/progress/stop (Gate 3) |
 | Sends, dispatch results, receipts | **Simulated end to end.** `verified_against_real_source = 0` on every receipt | Real outbound operation and reconciled receipt (Gate 3) |
@@ -303,7 +303,7 @@ mock adapters.
 ## Tests
 
 ```bash
-python3 -m unittest discover -s tests -t .           # 466 tests, no third-party dependency
+python3 -m unittest discover -s tests -t .           # 505 tests, no third-party dependency
 ```
 
 The five required scenarios:

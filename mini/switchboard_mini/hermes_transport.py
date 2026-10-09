@@ -36,6 +36,10 @@ persisted, put in a URL or written into an error string; only ``token_present`` 
 response the recorded body is checked **positively** for the token value; if it occurs
 there the row is refused (``token_echoed_in_response``) and no body is emitted. Any
 recorded string under a key matching :data:`SECRET_KEY_PATTERN` is scrubbed first.
+The value is read from the environment or, for a caller that constructs this transport
+directly (a test, or the CLI's fixture-free path), handed in as an argument: neither is a
+file read, and the status document names which of the two the value came from instead of
+claiming the environment for a key that never passed through it.
 
 **No macOS guard.** Beeper's transport refuses to make a request off macOS because the
 Desktop API is an app's loopback port reached through an app on the Mac. Hermes
@@ -674,6 +678,55 @@ def _ms(started: float) -> int:
     return int((time.monotonic() - started) * 1000)
 
 
+class _Secret:
+    """A bearer key held so that no printable view of its holder can publish the value.
+
+    R14/T12: the key never leaves the process environment, and "never" has to survive the
+    accidents as well as the deliberate paths. A plain ``str`` attribute is published by
+    every one of these, none of which is a decision anybody makes:
+
+    * ``repr(transport)`` / ``str(transport)`` / ``f"{transport}"``
+    * ``print(vars(transport))``, ``print(transport.__dict__)``, an f-string of either
+    * a traceback or a debugger rendering of an object whose locals hold the transport
+    * ``repr(outcome)``, and anything that walks the outcome's graph
+
+    ``__repr__``, ``__str__`` and ``__format__`` each answer
+    :data:`_Secret.PLACEHOLDER`, so every one of the above prints the placeholder. The
+    value is reachable only through the explicit ``.value`` attribute, which is the one
+    place a reader is meant to look and which never reaches a document, a log line, a URL
+    or a refusal sentence.
+    """
+
+    __slots__ = ("_value",)
+
+    #: What every printable form of a held key says instead of the key.
+    PLACEHOLDER = "[redacted: the bearer key value is never printable]"
+
+    def __init__(self, value: Optional[str] = None) -> None:
+        self._value = (value or "").strip()
+
+    @property
+    def value(self) -> str:
+        """The key itself. Called only for the header, the echo check and the
+        emptiness/length gate -- never to build a sentence or a document."""
+        return self._value
+
+    def __bool__(self) -> bool:
+        return bool(self._value)
+
+    def __len__(self) -> int:
+        return len(self._value)
+
+    def __repr__(self) -> str:
+        return self.PLACEHOLDER
+
+    def __str__(self) -> str:
+        return self.PLACEHOLDER
+
+    def __format__(self, format_spec: str) -> str:
+        return self.PLACEHOLDER
+
+
 def parse_event_names(text: str, *, limit: int = DEFAULT_MAX_EVENTS) -> dict:
     """Event **names and counts** from an SSE body. Never payload text.
 
@@ -800,16 +853,49 @@ class HttpHermesTransport(HermesTransport):
                  opener: Optional[Callable[..., Any]] = None):
         self.token_env = token_env
         self.base_url = (base_url or base_url_from_env()).rstrip("/")
-        # Read the key once, hold it in memory, never expose it.
-        self._token = token if token is not None else token_value(token_env)
-        self._token = (self._token or "").strip()
+        # Read the key once and hold it wrapped, so no printable view of this object can
+        # publish the value (see :class:`_Secret`): repr(), a debug print of __dict__ and
+        # a traceback rendering locals all show the placeholder, not the key.
+        self._token = _Secret(token if token is not None else token_value(token_env))
+        #: Did this value come from the constructor rather than the environment? Recorded so
+        #: ``held_token_document`` can say which, without recording the value.
+        self._token_from_argument = token is not None
         self.profile = profile
         self.timeout_s = int(timeout_s)
         # See the class docstring: an injected opener is a stand-in by construction.
         self.stand_in = bool(stand_in or standin_requested() or opener is not None)
         self._opener = opener
 
+    def __repr__(self) -> str:
+        """Never the key value: ``_token`` prints as :data:`_Secret.PLACEHOLDER`."""
+        return (f"<HttpHermesTransport base_url={self.base_url!r} "
+                f"profile={self.profile!r} stand_in={self.stand_in} "
+                f"token={self._token!r}>")
+
     # -- preconditions -----------------------------------------------------
+    def held_token_document(self) -> dict:
+        """The token status document for the key *this transport holds*.
+
+        ``token_status_document`` answers from the process environment, and this transport
+        can hold a key that never passed through it (the constructor seam used by tests and
+        by the CLI's own construction). Answering from the environment in that case said
+        "no bearer key is configured" while the gate was passing and requests were being
+        authorised with one -- a status document contradicting the transport's own
+        behaviour. Presence and the echo-check floor are reported from the held key; which
+        of the two places it came from is named; and the value is never recorded either way.
+        """
+        document = token_status_document(self.token_env)
+        document["token_present"] = bool(self._token)
+        document["token_below_the_echo_check_floor"] = (
+            bool(self._token) and len(self._token) < MIN_TOKEN_LEN_FOR_ECHO_CHECK)
+        if self._token_from_argument:
+            document["token_source"] = (
+                "an explicit constructor argument (not read from the environment variable "
+                + token_env_name(self.token_env) + ")")
+        document["token_value_recorded"] = False
+        document["token_read_from_file"] = False
+        return document
+
     def _token_gate(self) -> Optional[O.Outcome]:
         if not self._token:
             name = token_env_name(self.token_env)
@@ -817,7 +903,7 @@ class HttpHermesTransport(HermesTransport):
                 f"no Hermes bearer key is configured: {name} is empty or unset, so no "
                 "request was made and nothing was read.",
                 reason="token_absent", adapter=self.name,
-                data=token_status_document(self.token_env),
+                data=self.held_token_document(),
                 next_action=(f"put the gateway key the owner configured "
                              f"(API_SERVER_ENABLED / API_SERVER_KEY, O17) into this "
                              f"process's environment as {name} and re-run"))
@@ -833,7 +919,7 @@ class HttpHermesTransport(HermesTransport):
                 "rule, and a key shorter than it would match ordinary prose, so an echoed "
                 "body would be recorded and printed undetected.",
                 reason="token_too_short_for_the_echo_check", adapter=self.name,
-                data={**token_status_document(self.token_env),
+                data={**self.held_token_document(),
                       "token_length_recorded": False,
                       "token_length_class": ("below the worker's echo-check floor"),
                       "refusal_is_ours": True,
@@ -852,10 +938,10 @@ class HttpHermesTransport(HermesTransport):
 
     def token_status(self) -> O.Outcome:
         # A local check only: it contacts nothing.
-        document = token_status_document(self.token_env)
+        document = self.held_token_document()
         if not self._token:
             return O.Outcome.permission_denied(
-                f"no Hermes bearer key is present: {token_status_document(self.token_env)['token_env_var']} "
+                f"no Hermes bearer key is present: {document['token_env_var']} "
                 "is empty or unset. No request was made.",
                 reason="token_absent", adapter=self.name, data=document,
                 next_action=("export the gateway key (API_SERVER_KEY, O17) into this "
@@ -884,7 +970,7 @@ class HttpHermesTransport(HermesTransport):
             data = json.dumps(payload, sort_keys=True).encode("utf-8")
         request = urllib.request.Request(url, data=data, method=meta["method"])
         # O17: "Bearer token auth via the Authorization header".
-        request.add_header("Authorization", "Bearer " + self._token)
+        request.add_header("Authorization", "Bearer " + self._token.value)
         request.add_header("Accept", "application/json, text/event-stream")
         if data is not None:
             request.add_header("Content-Type", "application/json")
@@ -1105,7 +1191,7 @@ class HttpHermesTransport(HermesTransport):
                                         if replay_header is not None else None}
 
         # The positive echo check runs before anything is recorded from the body.
-        if body_carries_token(text, self._token):
+        if body_carries_token(text, self._token.value):
             return self._stamp(O.Outcome.permanent(
                 "the gateway answered " + ENDPOINTS[operation]["path"] + " with a body "
                 "that contains the bearer key value itself, so the body was discarded and "
