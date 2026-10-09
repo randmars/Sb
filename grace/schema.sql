@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS source_account (
   enabled_operations TEXT NOT NULL DEFAULT '[]',-- JSON array of capability names
   health_state      TEXT NOT NULL,              -- connected|syncing|current|delayed|permission_denied|offline|error|partial_history
   health_detail     TEXT,
-  permission_state  TEXT NOT NULL,              -- granted|denied|not_determined|not_applicable
+  permission_state  TEXT NOT NULL,              -- granted|denied|not_determined|not_applicable|restricted
                                                 -- (one vocabulary: contracts.PERMISSION_STATES)
   last_success_at   TEXT,
   last_probe_at     TEXT,
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS capability (
   -- measurement on Randy's Mac lands nowhere: what a row observed, what it was allowed to
   -- do, what it claimed, and whether a real source actually answered.
   observed_version      TEXT,                   -- the version THIS row observed, or 'not_observed'
-  permission            TEXT,                   -- granted|denied|not_determined|not_applicable
+  permission            TEXT,                   -- granted|denied|not_determined|not_applicable|restricted
   probe_assertion       TEXT,                   -- what supported=1 claims was observed
   evidence              TEXT,                   -- JSON: what was actually observed
   values_from_source    INTEGER,                -- 1 only when the row answered with source data

@@ -96,6 +96,11 @@ NEXT_ACTIONS: dict[str, str] = {
     "permission_denied":
         "Grant the permission in macOS System Settings ▸ Privacy & Security, then re-run the "
         "Gate 2 probe for this capability.",
+    "permission_restricted":
+        "macOS reports this permission as restricted, which means the owner cannot grant it "
+        "in System Settings ▸ Privacy & Security (parental controls, a managed profile or "
+        "another active restriction is blocking it). Nothing to grant here until that "
+        "restriction is lifted; the source stays unmeasured until then.",
     "offline":
         "Bring the source back online (start the desktop app or restore the network), then "
         "run `grace sync` for this account. Grace keeps the previous cursor, so nothing is lost.",
@@ -155,6 +160,9 @@ CONDITION_STATES: tuple = tuple(NEXT_ACTIONS)
 PERMISSION_CONDITIONS: dict = {
     C.PERMISSION_STATE_DENIED: C.PERMISSION_DENIED,
     C.PERMISSION_NOT_DETERMINED: "unknown",
+    # ``restricted`` is its own condition, not ``permission_denied``: the next action differs
+    # (the owner cannot grant it from the pane the grant advice points at).
+    C.PERMISSION_RESTRICTED: "permission_restricted",
 }
 
 

@@ -69,11 +69,18 @@ class ScriptRunner:
 
 
 class OsascriptRunner(ScriptRunner):
-    """The real runner. Requires macOS; elsewhere it returns an ``unsupported`` outcome."""
+    """The real runner. Requires macOS; elsewhere it returns an ``unsupported`` outcome.
 
-    def __init__(self, *, executable: str = OSASCRIPT, max_output_bytes: int = 4_000_000):
+    ``language`` names the interpreter osascript is asked for. Mail is driven by AppleScript
+    (the default, no flag), and the Contacts helper by ``JavaScript`` -- the only route to a
+    framework with no scripting dictionary, and still standard library on this side.
+    """
+
+    def __init__(self, *, executable: str = OSASCRIPT, max_output_bytes: int = 4_000_000,
+                 language: Optional[str] = None):
         self.executable = executable
         self.max_output_bytes = max_output_bytes
+        self.language = language
 
     def available(self) -> bool:
         import os
@@ -81,7 +88,10 @@ class OsascriptRunner(ScriptRunner):
         return sys.platform == "darwin" and os.path.exists(self.executable)
 
     def run(self, script: str, *, script_kind: str, timeout_s: int = 120) -> ScriptResult:
-        argv = [self.executable, "-e", script]
+        argv = [self.executable]
+        if self.language:
+            argv += ["-l", self.language]
+        argv += ["-e", script]
         started = time.monotonic()
         try:
             proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout_s)
@@ -125,9 +135,15 @@ def parse_ae_message(stderr: str) -> str:
     return (stderr or "").strip()[:400]
 
 
-def classify(result: ScriptResult, *, adapter: str, account_id: Optional[str] = None) -> O.Outcome:
+def classify(result: ScriptResult, *, adapter: str, account_id: Optional[str] = None,
+             application: str = "Mail") -> O.Outcome:
     """Turn a failed script result into a typed outcome. Success returns ``ok`` with the
-    stdout, which the caller then parses."""
+    stdout, which the caller then parses.
+
+    ``application`` names the source the automation was aimed at, so the same table serves
+    Mail (Apple events) and Contacts (the JavaScript bridge) without one source's failures
+    being described in the other's words.
+    """
     if result.returncode == 0 and not result.timed_out:
         return O.Outcome.ok({"stdout": result.stdout}, adapter=adapter,
                             account_id=account_id, duration_ms=result.duration_ms)
@@ -148,19 +164,19 @@ def classify(result: ScriptResult, *, adapter: str, account_id: Optional[str] = 
     message = parse_ae_message(result.stderr)
     if code is not None and code in AE_ERROR_MAP:
         outcome_code, reason = AE_ERROR_MAP[code]
-        detail = (f"Mail automation error {code} ({reason}) during {result.script_kind}: "
+        detail = (f"{application} automation error {code} ({reason}) during {result.script_kind}: "
                   f"{message}")
         data = {"ae_code": code, "ae_message": message, "script_kind": result.script_kind}
         if outcome_code == O.PERMISSION_DENIED:
             return O.Outcome.permission_denied(
                 detail, reason=reason, data=data, adapter=adapter, account_id=account_id,
                 duration_ms=result.duration_ms,
-                next_action="grant this worker Automation access to Mail in System Settings "
+                next_action=f"grant this worker Automation access to {application} in System Settings "
                             "(see mini/README.md); the capability stays unsupported until then")
         if outcome_code == O.OFFLINE:
             return O.Outcome.offline(detail, reason=reason, data=data, adapter=adapter,
                                      account_id=account_id, duration_ms=result.duration_ms,
-                                     next_action="launch Mail.app and retry")
+                                     next_action=f"launch {application} and retry")
         if outcome_code == O.RETRYABLE_ERROR:
             return O.Outcome.retryable(detail, reason=reason, data=data, adapter=adapter,
                                        account_id=account_id, duration_ms=result.duration_ms,
@@ -175,7 +191,7 @@ def classify(result: ScriptResult, *, adapter: str, account_id: Optional[str] = 
                                    account_id=account_id, duration_ms=result.duration_ms)
     raw = (message or result.stderr or "").strip()[:400]
     return O.Outcome.permanent(
-        f"unclassified Mail automation failure during {result.script_kind}: {raw}",
+        f"unclassified {application} automation failure during {result.script_kind}: {raw}",
         reason="unclassified_automation_error", adapter=adapter, account_id=account_id,
         data={"ae_code": code, "ae_message": message, "script_kind": result.script_kind,
               "returncode": result.returncode, "stderr": (result.stderr or "")[:1000]},

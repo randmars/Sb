@@ -1,0 +1,253 @@
+{
+  "synthetic": true,
+  "recorded_on": "the Linux team computer, 2026-10-09",
+  "recorded_by": "engineer, Gate 2 Contacts slice",
+  "why_synthetic": "no macOS host is reachable from the team computer, so this file is a hand-built recording of the *shape* of a helper response -- the field names and refusal reasons the shipped JXA helper emits, and the documented call/return shapes in probe-pack records O13-O16. It is NOT a measurement of any Mac and every row it produces is labelled FIXTURE:. The Mac values land in the ledger only when Randy runs the probe on his Mac.",
+  "shipped_by": "mini/switchboard_mini/fixtures/contacts/",
+  "scenario": "change_history_steady",
+  "label": "FIXTURE:contacts(recorded Contacts fixture 'change_history_steady')",
+  "note": "A steady change history (no events, token returned), and an installed build whose unification toggle is absent: the honest 'no such call found' branch.",
+  "token_base64": "c3dpdGNoYm9hcmQtc3ludGhldGljLWhpc3RvcnktdG9rZW4tc3RlYWR5",
+  "responses": {
+    "authorization_status": {
+      "outcome": "ok",
+      "source_contacted": true,
+      "prompt_requested": false,
+      "selector_checked": "authorizationStatusForEntityType:",
+      "selector_present": true,
+      "entity_type_constant_present": true,
+      "raw_value": 3,
+      "resolved_name": "CNAuthorizationStatusAuthorized",
+      "constants_resolved": {
+        "CNAuthorizationStatusNotDetermined": 0,
+        "CNAuthorizationStatusRestricted": 1,
+        "CNAuthorizationStatusDenied": 2,
+        "CNAuthorizationStatusAuthorized": 3,
+        "CNAuthorizationStatusLimited": 4
+      }
+    },
+    "request_access": {
+      "outcome": "ok",
+      "source_contacted": true,
+      "selector_present": true,
+      "blocked_ms": 0,
+      "granted": true,
+      "completion_handler_called": true,
+      "status_before": "CNAuthorizationStatusAuthorized",
+      "status_after": "CNAuthorizationStatusAuthorized"
+    },
+    "enumerate": {
+      "outcome": "ok",
+      "source_contacted": true,
+      "prompt_requested": false,
+      "keys_requested": [
+        "CNContactIdentifierKey",
+        "CNContactGivenNameKey",
+        "CNContactFamilyNameKey",
+        "CNContactEmailAddressesKey",
+        "CNContactPhoneNumbersKey"
+      ],
+      "keys_resolved": [
+        "CNContactIdentifierKey",
+        "CNContactGivenNameKey",
+        "CNContactFamilyNameKey",
+        "CNContactEmailAddressesKey",
+        "CNContactPhoneNumbersKey"
+      ],
+      "keys_missing_at_runtime": [],
+      "key_guard_notes": {},
+      "selector_checked": "enumerateContactsWithFetchRequest:error:usingBlock:",
+      "selector_present": true,
+      "call_used": "enumerateContactsWithFetchRequest:error:usingBlock:",
+      "items": [
+        {
+          "identifier": "99CC00DD-0001-4000-8000-000000000001",
+          "identifier_length": 36,
+          "has_name": true,
+          "has_email": true,
+          "has_phone": false
+        },
+        {
+          "identifier": "99CC00DD-0002-4000-8000-000000000002",
+          "identifier_length": 36,
+          "has_name": true,
+          "has_email": true,
+          "has_phone": true
+        }
+      ],
+      "limit": 25,
+      "truncated": false,
+      "values_emitted": false,
+      "error": null,
+      "unify_off_selector_checked": "setShouldUnifyResults:",
+      "unify_off_selector_present": true,
+      "authorization": {
+        "outcome": "ok",
+        "source_contacted": true,
+        "prompt_requested": false,
+        "selector_checked": "authorizationStatusForEntityType:",
+        "selector_present": true,
+        "entity_type_constant_present": true,
+        "raw_value": 3,
+        "resolved_name": "CNAuthorizationStatusAuthorized",
+        "constants_resolved": {
+          "CNAuthorizationStatusNotDetermined": 0,
+          "CNAuthorizationStatusRestricted": 1,
+          "CNAuthorizationStatusDenied": 2,
+          "CNAuthorizationStatusAuthorized": 3,
+          "CNAuthorizationStatusLimited": 4
+        }
+      }
+    },
+    "enumerate_unify_off": {
+      "outcome": "refused",
+      "source_contacted": false,
+      "prompt_requested": false,
+      "refusal": {
+        "reason": "unification_toggle_absent",
+        "detail": "the installed framework's setShouldUnifyResults: check said this build does not respond to the unification toggle, and no page read in the pack documents that property (O13 procedure step 4 asks for its exact name from the installed SDK header), so individual (un-unified) records were not fetched and nothing is claimed about them"
+      },
+      "keys_requested": [
+        "CNContactIdentifierKey",
+        "CNContactGivenNameKey",
+        "CNContactFamilyNameKey",
+        "CNContactEmailAddressesKey",
+        "CNContactPhoneNumbersKey"
+      ],
+      "values_emitted": false,
+      "limit": 25,
+      "authorization": {
+        "outcome": "ok",
+        "source_contacted": true,
+        "prompt_requested": false,
+        "selector_checked": "authorizationStatusForEntityType:",
+        "selector_present": true,
+        "entity_type_constant_present": true,
+        "raw_value": 3,
+        "resolved_name": "CNAuthorizationStatusAuthorized",
+        "constants_resolved": {
+          "CNAuthorizationStatusNotDetermined": 0,
+          "CNAuthorizationStatusRestricted": 1,
+          "CNAuthorizationStatusDenied": 2,
+          "CNAuthorizationStatusAuthorized": 3,
+          "CNAuthorizationStatusLimited": 4
+        }
+      },
+      "items": [],
+      "error": null,
+      "raised": null,
+      "truncated": false,
+      "stop_flag_unavailable": false,
+      "call_used": null,
+      "selector_checked": "enumerateContactsWithFetchRequest:error:usingBlock:",
+      "selector_present": false,
+      "unify_off_selector_checked": "setShouldUnifyResults:",
+      "unify_off_selector_present": false,
+      "keys_resolved": [
+        "CNContactIdentifierKey",
+        "CNContactGivenNameKey",
+        "CNContactFamilyNameKey",
+        "CNContactEmailAddressesKey",
+        "CNContactPhoneNumbersKey"
+      ],
+      "keys_missing_at_runtime": [],
+      "key_guard_notes": {}
+    },
+    "restricted_keys": {
+      "outcome": "refused",
+      "source_contacted": false,
+      "refusal": {
+        "reason": "key_symbol_not_supplied",
+        "detail": "no notes-guarded key symbol is documented on any page read in the pack"
+      },
+      "authorization": {
+        "outcome": "ok",
+        "source_contacted": true,
+        "prompt_requested": false,
+        "selector_checked": "authorizationStatusForEntityType:",
+        "selector_present": true,
+        "entity_type_constant_present": true,
+        "raw_value": 3,
+        "resolved_name": "CNAuthorizationStatusAuthorized",
+        "constants_resolved": {
+          "CNAuthorizationStatusNotDetermined": 0,
+          "CNAuthorizationStatusRestricted": 1,
+          "CNAuthorizationStatusDenied": 2,
+          "CNAuthorizationStatusAuthorized": 3,
+          "CNAuthorizationStatusLimited": 4
+        }
+      },
+      "symbol_supplied": false,
+      "prompt_requested": false
+    },
+    "change_history": {
+      "outcome": "ok",
+      "source_contacted": true,
+      "prompt_requested": false,
+      "selector_checked": "enumeratorForChangeHistoryFetchRequest:error:",
+      "selector_present": true,
+      "fetch_succeeded": true,
+      "event_classification": "counted by class name (O15: deciding an event's specific class by isKindOfClass-style dispatch is not recommended)",
+      "event_counts": {},
+      "events_in_order": [],
+      "drop_event_first": false,
+      "token_length": 40,
+      "token_file": "~/.switchboard/contacts-history-token",
+      "token_file_written": false,
+      "starting_token_present": false,
+      "include_group_changes": false,
+      "should_unify_results": true,
+      "error": null,
+      "authorization": {
+        "outcome": "ok",
+        "source_contacted": true,
+        "prompt_requested": false,
+        "selector_checked": "authorizationStatusForEntityType:",
+        "selector_present": true,
+        "entity_type_constant_present": true,
+        "raw_value": 3,
+        "resolved_name": "CNAuthorizationStatusAuthorized",
+        "constants_resolved": {
+          "CNAuthorizationStatusNotDetermined": 0,
+          "CNAuthorizationStatusRestricted": 1,
+          "CNAuthorizationStatusDenied": 2,
+          "CNAuthorizationStatusAuthorized": 3,
+          "CNAuthorizationStatusLimited": 4
+        }
+      }
+    },
+    "change_history_invalid": {
+      "outcome": "refused",
+      "source_contacted": false,
+      "refusal": {
+        "reason": "change_history_fetch_failed",
+        "detail": "the fetch returned nil, which O15 documents as the failure shape"
+      },
+      "authorization": {
+        "outcome": "ok",
+        "source_contacted": true,
+        "prompt_requested": false,
+        "selector_checked": "authorizationStatusForEntityType:",
+        "selector_present": true,
+        "entity_type_constant_present": true,
+        "raw_value": 3,
+        "resolved_name": "CNAuthorizationStatusAuthorized",
+        "constants_resolved": {
+          "CNAuthorizationStatusNotDetermined": 0,
+          "CNAuthorizationStatusRestricted": 1,
+          "CNAuthorizationStatusDenied": 2,
+          "CNAuthorizationStatusAuthorized": 3,
+          "CNAuthorizationStatusLimited": 4
+        }
+      },
+      "fetch_succeeded": false,
+      "error": {
+        "domain": "CNErrorDomain",
+        "code": null,
+        "description": null,
+        "description_error": "the real refusal text is a Mac measurement"
+      },
+      "prompt_requested": false
+    }
+  }
+}

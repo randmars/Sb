@@ -31,10 +31,29 @@ import unittest
 
 from switchboard_mini import cli
 from switchboard_mini import outcomes as O
-from switchboard_mini.beeper_adapter import MEASURED_CAPABILITIES
+from switchboard_mini.beeper_adapter import MEASURED_CAPABILITIES as BEEPER_MEASURED
+from switchboard_mini.contacts_adapter import MEASURED_CAPABILITIES as CONTACTS_MEASURED
 from switchboard_mini.mail_adapter import build_adapter, make_ref
 from switchboard_mini.probe import (CAPABILITY_NAMES, DOCUMENTED_CAPABILITY_NAMES, ROW_FIELDS,
                                     ROW_LABELLING_FIELDS)
+
+#: Which capability each adapter measures, derived from the adapters themselves rather than
+#: hand-maintained here -- a new slice lands and moves its own rows out of the documentation
+#: set, and no count in this file has to be edited. The names are the ``source`` field the
+#: adapter's rows carry.
+MEASURED_BY = {
+    **{name: "beeper" for name in BEEPER_MEASURED},
+    **{name: "contacts" for name in CONTACTS_MEASURED},
+}
+#: Every capability an adapter in the worker can measure on a host (fixture mode included).
+MEASURED_CAPABILITIES = tuple(MEASURED_BY)
+#: The rows still answered only by the Gate 2 probe pack: nothing in the worker measures
+#: them, so they stay documentation reads. 13 of the pack's 22 documented capabilities as
+#: of the Contacts slice: the 8 Hermes rows (no adapter yet) and the 5 Beeper rows this
+#: read-only slice deliberately does not build (send, send reconciliation, attachment
+#: materialisation, composer prefill, live event stream).
+DOCUMENTATION_ONLY_CAPABILITIES = tuple(name for name in DOCUMENTED_CAPABILITY_NAMES
+                                        if name not in MEASURED_BY)
 
 REPO_MINI = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                          "mini")
@@ -291,10 +310,13 @@ class TestEveryCommandFixtureMode(CliCaseMixin, unittest.TestCase):
                 self.assertFalse(row["adapter_is_real"])
                 self.assertFalse(row["real_source_connected"])
                 self.assertTrue(O.is_fixture_label(row["label"]))
-                # A fixture disclaimer names the source it did *not* contact: the Mail rows
-                # say Mail, the Beeper adapter's recorded rows say Beeper Desktop.
-                expected = "Beeper Desktop" if row["source"] == "beeper" else "Mail.app"
-                self.assertIn(f"No {expected} was contacted", row["disclaimer"])
+                # A fixture disclaimer names the source it did *not* contact, and the row
+                # itself says which source that is: the expectation is read out of the
+                # worker's own per-source table (``fixture_disclaimer(source)``), so a new
+                # adapter's wording reaches this test with no hand-maintained table to drift.
+                self.assertEqual(row["disclaimer"], O.fixture_disclaimer(row["source"]),
+                                 f"{row['capability']}: fixture disclaimer must name its own "
+                                 f"source ({row['source']!r}) and claim no other")
         for row in documented:
             # Recorded fixtures answer ``fixture``; the pack rows contacted nothing at all on
             # any host, so they are ``documentation`` -- and never supported.
@@ -398,43 +420,46 @@ class TestFlagPositions(unittest.TestCase):
         # asserted separately; every row this machine actually produced is a labelled fixture.
         fixture_origins = [r["origin"] for r in rows_after if r["origin"] != O.DOCUMENTATION]
         self.assertEqual(fixture_origins, [O.FIXTURE] * len(fixture_origins))
-        # The multi-adapter probe changed what may be asserted here. The Beeper adapter is
-        # in this run, so the rows for the capabilities it participates in carry *its own*
-        # origin (a labelled fixture, never `documentation`, never supported) and the
-        # documentation row for each of those capabilities is absent from the run
-        # altogether: one run emits one row per capability key. Every capability no adapter
-        # in this run measures -- Contacts and Hermes, which have no adapter in the worker
-        # yet -- is still the documentation read the pack records, and still unmeasured.
+        # The multi-adapter probe changed what may be asserted here. The Beeper *and*
+        # Contacts adapters are in this run, so the rows for the capabilities they
+        # participate in carry their own adapter's origin (a labelled fixture, never
+        # `documentation`, never supported) and the documentation row for each of those
+        # capabilities is absent from the run altogether: one run emits one row per
+        # capability key. Every capability no adapter in this run measures -- the 8 Hermes
+        # rows, and the 5 Beeper rows this read-only slice deliberately does not build -- is
+        # still the documentation read the pack records, and still unmeasured.
         by_capability: dict = {}
         for row in rows_after:
             by_capability.setdefault(row["capability"], []).append(row)
-        self.assertTrue(MEASURED_CAPABILITIES, "the Beeper adapter declares the rows it measures")
+        self.assertTrue(MEASURED_BY, "each adapter declares the rows it measures")
         for name in MEASURED_CAPABILITIES:
-            with self.subTest(capability=name, whence="measured by the Beeper adapter"):
+            with self.subTest(capability=name, whence="measured by an adapter in this run"):
                 rows_for = by_capability.get(name, [])
                 self.assertEqual(len(rows_for), 1, "one row per capability key, per run")
                 row = rows_for[0]
-                self.assertEqual(row["source"], "beeper")
+                self.assertEqual(row["source"], MEASURED_BY[name],
+                                 f"{name}: measured by the {MEASURED_BY[name]} adapter")
                 self.assertEqual(row["origin"], O.FIXTURE,     # the adapter's own origin
                                  f"{name}: a measured row carries its adapter's origin")
                 self.assertTrue(row["supersedes"],
                                 f"{name}: it names the documentation row it replaces")
                 self.assertFalse(row["supported"], f"{name}: a fixture row is never supported")
-        documentation_only = [name for name in DOCUMENTED_CAPABILITY_NAMES
-                              if name not in MEASURED_CAPABILITIES]
-        self.assertTrue(documentation_only, "some capabilities still have no adapter")
-        for name in documentation_only:
+        self.assertTrue(DOCUMENTATION_ONLY_CAPABILITIES,
+                        "some capabilities still have no adapter")
+        for name in DOCUMENTATION_ONLY_CAPABILITIES:
             with self.subTest(capability=name, whence="no adapter in this run measures it"):
                 rows_for = by_capability.get(name, [])
                 self.assertEqual(len(rows_for), 1)
                 self.assertEqual(rows_for[0]["origin"], O.DOCUMENTATION)
                 self.assertEqual(rows_for[0]["state"], O.PROBE_UNMEASURED)
                 self.assertFalse(rows_for[0]["supported"])
-        # The documentation row for a capability the Beeper adapter measures is not in the
-        # run at all -- a run may never carry both rows for one capability key.
+        # The documentation row for a capability an adapter measures is not in the run at
+        # all -- a run may never carry both rows for one capability key. The split this
+        # run actually produced (38 rows: 25 adapter-measured, 13 documentation-only) is
+        # derived from the adapters, so the next slice moves its own rows without an edit.
         self.assertEqual([r["capability"] for r in documented_rows(rows_after)
-                          if r["capability"] in MEASURED_CAPABILITIES], [])
-        self.assertEqual(len(documented_rows(rows_after)), len(documentation_only),
+                          if r["capability"] in MEASURED_BY], [])
+        self.assertEqual(len(documented_rows(rows_after)), len(DOCUMENTATION_ONLY_CAPABILITIES),
                          "every documentation row in this run has no adapter measuring it")
         self.assertEqual([r["state"] for r in rows_before],
                          [r["state"] for r in rows_after])

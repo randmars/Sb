@@ -1,0 +1,179 @@
+{
+  "synthetic": true,
+  "recorded_on": "the Linux team computer, 2026-10-09",
+  "recorded_by": "engineer, Gate 2 Contacts slice",
+  "why_synthetic": "no macOS host is reachable from the team computer, so this file is a hand-built recording of the *shape* of a helper response -- the field names and refusal reasons the shipped JXA helper emits, and the documented call/return shapes in probe-pack records O13-O16. It is NOT a measurement of any Mac and every row it produces is labelled FIXTURE:. The Mac values land in the ledger only when Randy runs the probe on his Mac.",
+  "shipped_by": "mini/switchboard_mini/fixtures/contacts/",
+  "scenario": "authorization_restricted",
+  "label": "FIXTURE:contacts(recorded Contacts fixture 'authorization_restricted')",
+  "note": "Restricted: the owner cannot grant this from the pane the grant advice points at. This is the scenario that exercises the fifth permission value.",
+  "token_base64": "c3dpdGNoYm9hcmQtc3ludGhldGljLWhpc3RvcnktdG9rZW4tcmVzdHJpY3RlZA==",
+  "responses": {
+    "authorization_status": {
+      "outcome": "ok",
+      "source_contacted": true,
+      "prompt_requested": false,
+      "selector_checked": "authorizationStatusForEntityType:",
+      "selector_present": true,
+      "entity_type_constant_present": true,
+      "raw_value": 1,
+      "resolved_name": "CNAuthorizationStatusRestricted",
+      "constants_resolved": {
+        "CNAuthorizationStatusNotDetermined": 0,
+        "CNAuthorizationStatusRestricted": 1,
+        "CNAuthorizationStatusDenied": 2,
+        "CNAuthorizationStatusAuthorized": 3,
+        "CNAuthorizationStatusLimited": 4
+      }
+    },
+    "request_access": {
+      "outcome": "ok",
+      "source_contacted": true,
+      "selector_checked": "requestAccessForEntityType:completionHandler:",
+      "selector_present": true,
+      "prompt_expected": true,
+      "prompt_text": null,
+      "prompt_text_recorded": false,
+      "prompt_text_note": "the macOS consent dialog's text is not readable by the process it is shown for; the owner records it verbatim (O13 probe step 2)",
+      "blocked_ms": 0,
+      "granted": false,
+      "error": null,
+      "completion_handler_called": true,
+      "status_before": "CNAuthorizationStatusRestricted",
+      "status_before_raw": 1,
+      "status_after": "CNAuthorizationStatusRestricted",
+      "status_after_raw": 1,
+      "note": "recorded shape: the status is restricted, so the owner cannot grant it here and macOS returns with granted false. This response is not a read: nothing was fetched"
+    },
+    "enumerate": {
+      "outcome": "refused",
+      "source_contacted": false,
+      "refusal": {
+        "reason": "authorization_not_granted",
+        "detail": "the store reports CNAuthorizationStatusRestricted, so this read path stops before it constructs a fetch: a fetch while the status is not authorized is what raises the system consent dialog"
+      },
+      "authorization": {
+        "outcome": "ok",
+        "source_contacted": true,
+        "prompt_requested": false,
+        "selector_checked": "authorizationStatusForEntityType:",
+        "selector_present": true,
+        "entity_type_constant_present": true,
+        "raw_value": 1,
+        "resolved_name": "CNAuthorizationStatusRestricted",
+        "constants_resolved": {
+          "CNAuthorizationStatusNotDetermined": 0,
+          "CNAuthorizationStatusRestricted": 1,
+          "CNAuthorizationStatusDenied": 2,
+          "CNAuthorizationStatusAuthorized": 3,
+          "CNAuthorizationStatusLimited": 4
+        }
+      },
+      "prompt_requested": false
+    },
+    "enumerate_unify_off": {
+      "outcome": "refused",
+      "source_contacted": false,
+      "refusal": {
+        "reason": "authorization_not_granted",
+        "detail": "the store reports CNAuthorizationStatusRestricted, so this read path stops before it constructs a fetch: a fetch while the status is not authorized is what raises the system consent dialog"
+      },
+      "authorization": {
+        "outcome": "ok",
+        "source_contacted": true,
+        "prompt_requested": false,
+        "selector_checked": "authorizationStatusForEntityType:",
+        "selector_present": true,
+        "entity_type_constant_present": true,
+        "raw_value": 1,
+        "resolved_name": "CNAuthorizationStatusRestricted",
+        "constants_resolved": {
+          "CNAuthorizationStatusNotDetermined": 0,
+          "CNAuthorizationStatusRestricted": 1,
+          "CNAuthorizationStatusDenied": 2,
+          "CNAuthorizationStatusAuthorized": 3,
+          "CNAuthorizationStatusLimited": 4
+        }
+      },
+      "prompt_requested": false
+    },
+    "restricted_keys": {
+      "outcome": "refused",
+      "source_contacted": false,
+      "refusal": {
+        "reason": "authorization_not_granted",
+        "detail": "the store reports CNAuthorizationStatusRestricted, so this read path stops before it constructs a fetch: a fetch while the status is not authorized is what raises the system consent dialog"
+      },
+      "authorization": {
+        "outcome": "ok",
+        "source_contacted": true,
+        "prompt_requested": false,
+        "selector_checked": "authorizationStatusForEntityType:",
+        "selector_present": true,
+        "entity_type_constant_present": true,
+        "raw_value": 1,
+        "resolved_name": "CNAuthorizationStatusRestricted",
+        "constants_resolved": {
+          "CNAuthorizationStatusNotDetermined": 0,
+          "CNAuthorizationStatusRestricted": 1,
+          "CNAuthorizationStatusDenied": 2,
+          "CNAuthorizationStatusAuthorized": 3,
+          "CNAuthorizationStatusLimited": 4
+        }
+      },
+      "prompt_requested": false
+    },
+    "change_history": {
+      "outcome": "refused",
+      "source_contacted": false,
+      "refusal": {
+        "reason": "authorization_not_granted",
+        "detail": "the store reports CNAuthorizationStatusRestricted, so this read path stops before it constructs a fetch: a fetch while the status is not authorized is what raises the system consent dialog"
+      },
+      "authorization": {
+        "outcome": "ok",
+        "source_contacted": true,
+        "prompt_requested": false,
+        "selector_checked": "authorizationStatusForEntityType:",
+        "selector_present": true,
+        "entity_type_constant_present": true,
+        "raw_value": 1,
+        "resolved_name": "CNAuthorizationStatusRestricted",
+        "constants_resolved": {
+          "CNAuthorizationStatusNotDetermined": 0,
+          "CNAuthorizationStatusRestricted": 1,
+          "CNAuthorizationStatusDenied": 2,
+          "CNAuthorizationStatusAuthorized": 3,
+          "CNAuthorizationStatusLimited": 4
+        }
+      },
+      "prompt_requested": false
+    },
+    "change_history_invalid": {
+      "outcome": "refused",
+      "source_contacted": false,
+      "refusal": {
+        "reason": "authorization_not_granted",
+        "detail": "the store reports CNAuthorizationStatusRestricted, so this read path stops before it constructs a fetch: a fetch while the status is not authorized is what raises the system consent dialog"
+      },
+      "authorization": {
+        "outcome": "ok",
+        "source_contacted": true,
+        "prompt_requested": false,
+        "selector_checked": "authorizationStatusForEntityType:",
+        "selector_present": true,
+        "entity_type_constant_present": true,
+        "raw_value": 1,
+        "resolved_name": "CNAuthorizationStatusRestricted",
+        "constants_resolved": {
+          "CNAuthorizationStatusNotDetermined": 0,
+          "CNAuthorizationStatusRestricted": 1,
+          "CNAuthorizationStatusDenied": 2,
+          "CNAuthorizationStatusAuthorized": 3,
+          "CNAuthorizationStatusLimited": 4
+        }
+      },
+      "prompt_requested": false
+    }
+  }
+}

@@ -28,14 +28,22 @@ from switchboard_mini import probe as P              # noqa: E402
 
 
 class TestPermissionVocabularyIsOne(unittest.TestCase):
-    def test_the_four_permission_states_are_identical_and_in_order(self) -> None:
+    def test_the_five_permission_states_are_identical_and_in_order(self) -> None:
+        """``restricted`` joined the vocabulary with the Contacts slice (Gate 2, R09).
+
+        A macOS Contacts grant can be *restricted* -- not denied by the user but not
+        available either -- so the closed list is five, not four. The literal is frozen
+        here on purpose: adding a state means changing it deliberately, on both sides.
+        """
         self.assertEqual(tuple(C.PERMISSION_STATES), tuple(O.PERMISSION_STATES))
         self.assertEqual(set(C.PERMISSION_STATES),
-                         {"granted", "denied", "not_determined", "not_applicable"})
+                         {"granted", "denied", "not_determined", "not_applicable",
+                          "restricted"})
 
     def test_every_spelling_of_a_permission_state_is_the_same_string(self) -> None:
         pairs = (("PERMISSION_GRANTED",), ("PERMISSION_STATE_DENIED",),
-                 ("PERMISSION_NOT_DETERMINED",), ("PERMISSION_NOT_APPLICABLE",))
+                 ("PERMISSION_NOT_DETERMINED",), ("PERMISSION_NOT_APPLICABLE",),
+                 ("PERMISSION_RESTRICTED",))
         for (name,) in pairs:
             with self.subTest(name=name):
                 self.assertEqual(getattr(C, name), getattr(O, name))

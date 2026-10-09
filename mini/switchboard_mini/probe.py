@@ -258,7 +258,8 @@ class ProbeContext:
     def __init__(self, adapter, *, sample: int = 5, account: Optional[str] = None,
                  mailbox: Optional[str] = None, max_scan: int = 2000,
                  beeper_account_id: Optional[str] = None,
-                 beeper_ui_oldest_visible: Optional[str] = None):
+                 beeper_ui_oldest_visible: Optional[str] = None,
+                 contacts: Optional[dict] = None):
         # One run may carry several adapters: the Mail adapter measures the Mail rows and
         # the Beeper adapter measures the Beeper rows, so one probe run produces exactly
         # one row per capability key and a documentation row is only ever emitted for a
@@ -279,6 +280,10 @@ class ProbeContext:
         self._mailbox_arg = mailbox
         self._beeper_account_id = beeper_account_id
         self._beeper_ui_oldest = beeper_ui_oldest_visible
+        # The Contacts reads take parameters a probe run does not discover (a token file, a
+        # key symbol the owner read from the SDK header, the file a two-run identifier
+        # comparison uses). They are passed in as data so one Context serves every source.
+        self._contacts = dict(contacts or {})
         self._memo: dict = {}
         self.harness_errors: list = []
 
@@ -292,6 +297,19 @@ class ProbeContext:
 
     def beeper_ui_oldest_visible(self) -> Optional[str]:
         return self._beeper_ui_oldest
+
+    # -- the Contacts parameters -------------------------------------------
+    def contacts_token_file(self) -> Optional[str]:
+        return self._contacts.get("token_file")
+
+    def contacts_key_symbol(self) -> Optional[str]:
+        return self._contacts.get("key_symbol")
+
+    def contacts_identifier_file(self) -> Optional[str]:
+        return self._contacts.get("identifier_file")
+
+    def contacts_limit(self) -> int:
+        return int(self._contacts.get("limit") or 25)
 
     # -- memoized reads ----------------------------------------------------
     def _once(self, key: str, call: Callable[[], Any]) -> Any:
@@ -414,6 +432,9 @@ def _row(context: ProbeContext, capability: Capability, *, supported: bool, stat
     the literal ``not_observed`` and the reason. ``supported`` is refused outright for a
     documentation-origin row, because a page is not a measurement.
 
+    ``limitation`` may be given by a caller whose source adapter has its own, more accurate
+    sentence than the pack's documentation text (a caller that does not pass one keeps the
+    previous behaviour: the documented caveat, then what the refusal actually said).
     ``measurement_target`` says what this row is a measurement *of*: ``"source"`` (the
     default, and every row but one) or ``"worker"`` for the worker's own manifest row,
     which never touches a source. The worker-side half of that rule is here: the marker is
@@ -528,7 +549,9 @@ def _blocked_row(context: ProbeContext, capability: Capability, outcome: O.Outco
                  extra: Optional[dict] = None, *, origin: Optional[str] = None,
                  adapter_is_real: Optional[bool] = None,
                  label: Optional[str] = None,
-                 supersedes: Optional[dict] = None) -> dict:
+                 supersedes: Optional[dict] = None,
+                 permission_state: Optional[str] = None,
+                 limitation: Optional[str] = None) -> dict:
     evidence = dict(outcome.data or {})          # e.g. the Apple event code and message
     evidence.update({
         "outcome_code": outcome.code,
@@ -540,9 +563,10 @@ def _blocked_row(context: ProbeContext, capability: Capability, outcome: O.Outco
     if extra:
         evidence.update(extra)
     return _row(context, capability, supported=False, state=outcome.code,
-                permission_state=_permission_for(outcome),
-                limitation=(f"{capability.limitation} — " if capability.limitation else "")
-                           + (outcome.detail or outcome.code),
+                permission_state=(permission_state or _permission_for(outcome)),
+                limitation=limitation or (
+                    (f"{capability.limitation} — " if capability.limitation else "")
+                    + (outcome.detail or outcome.code)),
                 evidence=evidence, origin=origin, adapter_is_real=adapter_is_real,
                 label=label, supersedes=supersedes, citations=())
 
@@ -1145,6 +1169,7 @@ def run_probe(adapter, *, sample: int = 5, account: Optional[str] = None,
               mailbox: Optional[str] = None, max_scan: int = 2000,
               beeper_account_id: Optional[str] = None,
               beeper_ui_oldest_visible: Optional[str] = None,
+              contacts: Optional[dict] = None,
               only_source: Optional[str] = None) -> ProbeRun:
     """Produce one row per capability. Never raises for an unsupported capability.
 
@@ -1154,7 +1179,8 @@ def run_probe(adapter, *, sample: int = 5, account: Optional[str] = None,
     """
     context = ProbeContext(adapter, sample=sample, account=account, mailbox=mailbox,
                            max_scan=max_scan, beeper_account_id=beeper_account_id,
-                           beeper_ui_oldest_visible=beeper_ui_oldest_visible)
+                           beeper_ui_oldest_visible=beeper_ui_oldest_visible,
+                           contacts=contacts)
     run = ProbeRun()
     for capability in CAPABILITIES:
         if only_source and capability.source != only_source:
