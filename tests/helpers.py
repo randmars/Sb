@@ -20,11 +20,25 @@ if str(REPO_ROOT) not in sys.path:
 
 from grace.service import Grace  # noqa: E402
 
+#: Every ``subprocess`` call in ``tests/`` passes ``stdin=subprocess.DEVNULL``, and
+#: ``tests/test_suite_process_hygiene.py`` fails the suite if one ever stops doing so.
+#: **What leaks without it:** the child inherits the parent's file descriptor 0, which is the
+#: terminal whenever a person runs the suite by hand. A child that reads it -- now, or after
+#: some later change to a CLI or a shell wrapper this suite spawns -- blocks until that
+#: terminal produces input, so the dots stop and the summary is never printed: from the
+#: outside that is indistinguishable from the interpreter hanging at exit, and it makes every
+#: "the suite is green" claim unverifiable. **Why the fix stops it:** detaching fd 0 removes
+#: the shared handle entirely, so a child can neither read nor hold the launching terminal and
+#: the suite returns no matter what it was started from. (This was investigated, not assumed:
+#: the suite runs to a summary in ~72 s both with ``< /dev/null`` and with a real pty on fd 0,
+#: and the lead's SIGUSR1 thread dump at the point the dots stop lists the main thread only.)
+
 
 def run_cli(db: str, *args: str, expect_ok: bool = True) -> dict:
     """Run the CLI in a fresh process and return its JSON document."""
     cmd = [sys.executable, "-m", "grace", "--db", db, *args]
-    proc = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
+    proc = subprocess.run(cmd, cwd=REPO_ROOT, stdin=subprocess.DEVNULL,
+                          capture_output=True, text=True)
     try:
         payload = json.loads(proc.stdout)
     except json.JSONDecodeError:  # pragma: no cover - surfaced with the raw output
@@ -38,7 +52,7 @@ def run_cli(db: str, *args: str, expect_ok: bool = True) -> dict:
 
 def run_cli_raw(db: str, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run([sys.executable, "-m", "grace", "--db", db, *args],
-                          cwd=REPO_ROOT, capture_output=True, text=True)
+                          cwd=REPO_ROOT, stdin=subprocess.DEVNULL, capture_output=True, text=True)
 
 
 class GraceTestCase(unittest.TestCase):

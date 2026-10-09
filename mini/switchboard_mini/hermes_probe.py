@@ -146,6 +146,26 @@ def _supersedes(capability) -> Optional[dict]:
     }
 
 
+def _stand_in(context, outcome=None) -> bool:
+    """Did a **labelled loopback stand-in** answer this row, rather than a Hermes gateway?
+
+    Two sources, either of which is enough, and neither of which a caller can forget:
+
+    * the outcome's own ``data['stand_in']``, which the transport sets at construction and
+      carries through every document it produces;
+    * the adapter's ``stand_in``, read off the same transport flag -- so a row built from an
+      outcome that never travelled through the transport (a local refusal, say) is still
+      marked when the run itself was pointed at a stand-in.
+
+    The point is that this is *not* a claim about the source: it is the one honest way to
+    keep a stand-in run out of the "measured on this host" population in Grace.
+    """
+    data = outcome.data if outcome is not None and isinstance(outcome.data, dict) else {}
+    if data.get("stand_in") is True:
+        return True
+    return bool(getattr(_adapter(context), "stand_in", False))
+
+
 def _measured(context, capability, outcome, *, supported: bool, limitation: str,
               evidence: dict, state: Optional[str] = None,
               state_reason: Optional[str] = None,
@@ -155,6 +175,12 @@ def _measured(context, capability, outcome, *, supported: bool, limitation: str,
     adapter = _adapter(context)
     if values_from_source is None and adapter.adapter_is_real:
         values_from_source = bool(outcome.real_source_connected)
+    stand_in = _stand_in(context, outcome)
+    if stand_in:
+        # A stand-in answered: nothing here came from the source, whatever the outcome's own
+        # success state says. ``_row`` refuses the combination outright, so a caller that
+        # reached here with a stand-in gets a labelled row rather than an exception.
+        values_from_source = False
     # A row state stays inside the shared vocabulary Grace validates
     # (``outcomes.ADAPTER_OUTCOMES``); the *named reason* is what makes it specific. The
     # reason and its smallest next action travel in the evidence, so a reader sees which
@@ -193,7 +219,8 @@ def _measured(context, capability, outcome, *, supported: bool, limitation: str,
                 # straight through to the row.
                 source_contacted=bool(outcome.source_contacted),
                 observed_version=observed_version,
-                observed_version_reason=observed_version_reason)
+                observed_version_reason=observed_version_reason,
+                stand_in=stand_in)
 
 
 def reason_entry(reason: str) -> dict:
@@ -249,9 +276,10 @@ def _not_a_real_measurement(context, capability, outcome, evidence: dict, *,
     # The responder is read from the outcome's own data, not re-derived from the adapter
     # class (audit finding: ``adapter_is_real`` means "this is the real transport class",
     # which is the *opposite* of what a stand-in is -- a stand-in opener is driven THROUGH
-    # that class, and a fixture is driven through the other one).
-    data = outcome.data if isinstance(outcome.data, dict) else {}
-    stand_in = data.get("stand_in") is True
+    # that class, and a fixture is driven through the other one). ``_stand_in`` also consults
+    # the adapter's construction-time flag, so a row built from a refusal still carries the
+    # marker when the run itself was pointed at a stand-in.
+    stand_in = _stand_in(context, outcome)
     if stand_in:
         limitation = ("the responder was "
                       f"{(outcome.data or {}).get('responder')!r}, not a real Hermes "
@@ -285,7 +313,7 @@ def _blocked(context, capability, outcome, evidence: Optional[dict] = None) -> d
     return _blocked_row(context, capability, outcome, evidence,
                         origin=adapter.origin, adapter_is_real=adapter.adapter_is_real,
                         label=adapter._label(), supersedes=_supersedes(capability),
-                        limitation=limitation)
+                        limitation=limitation, stand_in=_stand_in(context, outcome))
 
 
 def _version_for(context) -> Optional[str]:

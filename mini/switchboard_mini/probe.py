@@ -488,7 +488,8 @@ def _row(context: ProbeContext, capability: Capability, *, supported: bool, stat
          origin: Optional[str] = None, adapter_is_real: Optional[bool] = None,
          citations: Optional[tuple] = None, label: Optional[str] = None,
          supersedes: Optional[dict] = None,
-         measurement_target: Optional[str] = None) -> dict:
+         measurement_target: Optional[str] = None,
+         stand_in: Optional[bool] = None) -> dict:
     """Build one row, enforcing the rules that keep a row from over-claiming.
 
     ``observed_version`` is **never** defaulted from another row's read: a caller that
@@ -511,8 +512,15 @@ def _row(context: ProbeContext, capability: Capability, *, supported: bool, stat
     which never touches a source. The worker-side half of that rule is here: the marker is
     refused for any capability that is not a frozen worker self-measurement, and a
     self-measurement may carry no source values.
+
+    ``stand_in`` says a **labelled loopback stand-in** answered this row rather than the
+    source. It is a first-class row field (not evidence-only), it forces the ``STAND-IN:``
+    label and its disclaimer into the label column even though ``origin`` stays ``real``
+    (the real transport class produced the row), and it refuses a support claim outright:
+    a stand-in is not an observation of anything, so it can never be a measurement.
     """
     row_origin = origin or context.origin
+    row_stand_in = bool(stand_in)
     row_cites = tuple(citations if citations is not None else capability.citations)
     row_target = measurement_target or O.MEASUREMENT_SOURCE
     row_adapter_is_real = (bool(context.adapter_is_real) if adapter_is_real is None
@@ -551,11 +559,22 @@ def _row(context: ProbeContext, capability: Capability, *, supported: bool, stat
             "could be observed on any host")
     if not O.probe_row_supported_claim_allowed({
             "origin": row_origin, "supported": bool(supported),
+            "stand_in": row_stand_in,
             "values_from_source": bool(row_values_from_source),
             "real_source_connected": bool(row_real_source_connected)}):
         raise ValueError(
             f"probe row {capability.name!r}: a documentation-origin row may never be "
-            "supported=true (probe-pack scope statement)")
+            "supported=true (probe-pack scope statement), and a row a labelled stand-in "
+            "answered may never be supported either (a stand-in is not a source)")
+    if row_stand_in and row_real_source_connected:
+        raise ValueError(
+            f"probe row {capability.name!r}: stand_in=true says a labelled loopback "
+            "stand-in answered this row, so it may not also claim a real source was "
+            "connected")
+    if row_stand_in and row_values_from_source:
+        raise ValueError(
+            f"probe row {capability.name!r}: stand_in=true says a labelled loopback "
+            "stand-in answered this row, so it carries no source values")
     row = {
         "capability": capability.name,
         "title": capability.title,
@@ -583,6 +602,10 @@ def _row(context: ProbeContext, capability: Capability, *, supported: bool, stat
         "adapter_is_real": row_adapter_is_real,
         "values_from_source": row_values_from_source,
         "real_source_connected": row_real_source_connected,
+        # Did a labelled loopback stand-in answer this row, rather than the source? A
+        # first-class field so a reader does not have to open ``evidence`` to find out, and
+        # so Grace can keep such a row out of the "measured on this host" population.
+        "stand_in": row_stand_in,
         # What this row measured: a source, or -- for the worker's own manifest row, and
         # only there -- the worker itself.
         "measurement_target": row_target,
@@ -604,6 +627,13 @@ def _row(context: ProbeContext, capability: Capability, *, supported: bool, stat
         else:
             row["label"] = label or context.label or O.fixture_label(capability.source)
         row["disclaimer"] = O.disclaimer_for(row["origin"], source=capability.source)
+    elif row_stand_in:
+        # A stand-in row is ``origin: real`` (the real transport class produced it) and yet
+        # no source answered it, so the label column has to carry that. This is the fix for
+        # the hole the lead drove: the only tell used to be inside ``evidence``.
+        row["label"] = label or O.stand_in_label(capability.source)
+        row["disclaimer"] = O.disclaimer_for(row["origin"], source=capability.source,
+                                             stand_in=True)
     else:
         row["label"] = None
         row["disclaimer"] = None
@@ -626,7 +656,8 @@ def _blocked_row(context: ProbeContext, capability: Capability, outcome: O.Outco
                  label: Optional[str] = None,
                  supersedes: Optional[dict] = None,
                  permission_state: Optional[str] = None,
-                 limitation: Optional[str] = None) -> dict:
+                 limitation: Optional[str] = None,
+                 stand_in: Optional[bool] = None) -> dict:
     evidence = dict(outcome.data or {})          # e.g. the Apple event code and message
     evidence.update({
         "outcome_code": outcome.code,
@@ -643,7 +674,7 @@ def _blocked_row(context: ProbeContext, capability: Capability, outcome: O.Outco
                     (f"{capability.limitation} — " if capability.limitation else "")
                     + (outcome.detail or outcome.code)),
                 evidence=evidence, origin=origin, adapter_is_real=adapter_is_real,
-                label=label, supersedes=supersedes, citations=())
+                label=label, supersedes=supersedes, citations=(), stand_in=stand_in)
 
 
 # ------------------------------------------------------------- per capability --

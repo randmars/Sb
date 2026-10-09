@@ -148,6 +148,17 @@ class HermesReadOnlyAdapter:
         return bool(getattr(self.transport, "adapter_is_real", False))
 
     @property
+    def stand_in(self) -> bool:
+        """Is this adapter pointed at a labelled loopback stand-in rather than a gateway?
+
+        Read off the transport, which decides it at *construction* (a stub ``opener``, the
+        ``SWITCHBOARD_HERMES_STANDIN`` environment variable, or an explicit flag) -- the same
+        construction-based honesty the transport's own ``stand_in`` flag rests on, so no
+        caller can forget to pass it and mint a row that reads as a measurement.
+        """
+        return bool(getattr(self.transport, "stand_in", False))
+
+    @property
     def base_url(self) -> str:
         return getattr(self.transport, "base_url", "")
 

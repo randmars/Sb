@@ -800,6 +800,10 @@ def _capability_row(stored: dict) -> dict:
         # is the one that decides whether "no source was contacted" may be said at all.
         "values_from_source": bool(stored.get("values_from_source")),
         "real_source_connected": bool(stored.get("real_source_connected")),
+        # Did a labelled loopback stand-in answer this row? The ledger keeps the label, so
+        # this is read back out of it -- a reader of the stored population can tell a dry run
+        # from a source read (2026-10-09).
+        "stand_in": row_is_a_stand_in(stored),
         # What this row measured: 'source' for every row about Mail/Beeper/Contacts/Hermes,
         # 'worker' for the Mini worker's own manifest row (a self-measurement that contacts
         # nothing). Defect fix, 2026-10-09.
@@ -848,10 +852,18 @@ def probe_row_problems(row: dict) -> list[str]:
     if contract and contract != PROBE_CONTRACT_VERSION:
         problems.append(f"{name}: row was written by probe contract {contract!r}, this "
                         f"service stores {PROBE_CONTRACT_VERSION!r}")
-    # The scope-statement rule, and the flag consistency it depends on.
+    # The scope-statement rule, and the flag consistency it depends on. Two origins are
+    # refused here: a documentation read (a page is not an observation) and a labelled
+    # loopback stand-in (a local test responder is not the source). The message names which.
     if not C.probe_row_supported_claim_allowed(row):
-        problems.append(f"{name}: origin 'documentation' may never be supported=true "
-                        f"(probe-pack scope statement)")
+        if row.get("stand_in"):
+            problems.append(
+                f"{name}: stand_in=true says a labelled loopback stand-in answered this row, "
+                f"not the source, so it may never be supported=true (probe-pack scope "
+                f"statement; origin {origin!r} does not change that)")
+        else:
+            problems.append(f"{name}: origin 'documentation' may never be supported=true "
+                            f"(probe-pack scope statement)")
     target = row.get("measurement_target", C.MEASUREMENT_SOURCE)
     if target not in C.MEASUREMENT_TARGETS:
         problems.append(f"{name}: measurement_target {target!r} is not one of "
@@ -874,6 +886,30 @@ def probe_row_problems(row: dict) -> list[str]:
                         f"has no source values to have come from")
     if row.get("real_source_connected") and not row.get("values_from_source"):
         problems.append(f"{name}: real_source_connected=true while values_from_source=false")
+    # The stand-in defect (2026-10-09). A row a **labelled loopback stand-in** answered is
+    # not a measurement of anything: it may not claim a source and it may not carry source
+    # values. Without this, such a row is ``origin: real`` with ``real_source_connected:
+    # false`` and would sit in the ledger as a real-host measurement whose only tell was a
+    # free-text label. (Its ``supported`` claim is refused above, with its own message.)
+    if row.get("stand_in"):
+        if row.get("real_source_connected"):
+            problems.append(
+                f"{name}: stand_in=true says a labelled loopback stand-in answered this row, "
+                f"so it may not also claim real_source_connected=true")
+        if row.get("values_from_source"):
+            problems.append(
+                f"{name}: stand_in=true says a labelled loopback stand-in answered this row, "
+                f"so it carries no source values (values_from_source must be false)")
+        # The labelling rule, held at write time: a stand-in row's origin is ``real``, so the
+        # label column is the only visible tell. A row that says ``stand_in`` without the
+        # label is exactly the hole this whole change closes, and it is refused here rather
+        # than stored.
+        if not C.is_stand_in_label(row.get("label") or row.get("mock_label")):
+            problems.append(
+                f"{name}: stand_in=true but the row carries no {C.STAND_IN_LABEL_PREFIX!r} "
+                f"label (label={row.get('label')!r}, mock_label={row.get('mock_label')!r}) — "
+                f"a stand-in row's origin is 'real', so the label is the only place a reader "
+                f"can see that a loopback responder, not the source, answered")
     return problems
 
 
@@ -899,6 +935,22 @@ MEASURED_PROBE_ORIGINS = ("real", "fixture", "mock")
 #: replace. Named so a person or a script can act on the reason alone.
 DOCUMENTATION_REPLACES_REAL_MEASUREMENT = "documentation_would_replace_a_real_measurement"
 DOCUMENTATION_REPLACES_MEASUREMENT = "documentation_would_replace_a_measurement"
+#: A stand-in run may not overwrite a stored real measurement (2026-10-09). A stand-in is
+#: not a measurement of anything, so letting it land on the row a real sitting produced would
+#: silently destroy the only real evidence in the ledger and put a dry run in its place.
+STAND_IN_REPLACES_REAL_MEASUREMENT = "stand_in_would_replace_a_real_measurement"
+#: And it may not displace a stored documentation read either: a page read is at least about
+#: the documented surface, while a stand-in row is about a local test responder. Our policy,
+#: not a documented rule -- refusing loses nothing, and nothing here is measured.
+STAND_IN_REPLACES_DOCUMENTATION = "stand_in_would_replace_a_documentation_read"
+
+NEXT_ACTION_STAND_IN_REAL = (
+    "keep the stored real measurement: a labelled loopback stand-in is not a measurement, so "
+    "import it against an account with no stored real row for this capability, or import the "
+    "run the Mini worker takes against the real gateway")
+NEXT_ACTION_STAND_IN_DOCUMENTATION = (
+    "keep the stored documentation read and import the stand-in run somewhere it replaces "
+    "nothing: a stand-in row is not a measurement of this capability either")
 
 NEXT_ACTION_REAL_MEASUREMENT = (
     "keep the stored real measurement: re-import the run that measured this capability on "
@@ -930,6 +982,40 @@ def probe_row_handover(store: Store, account_id: str, rows: Iterable[dict]) -> d
         if stored is None:
             continue                    # first row for this capability key: nothing to hand over
         stored_origin = stored.get("origin")
+        if row.get("stand_in"):
+            # A labelled loopback stand-in is not a measurement of this capability, so it may
+            # not displace one -- neither the real measurement a sitting on Randy's Mac
+            # produced nor a documented page read (2026-10-09; see the reason constants).
+            stored_is_real = (stored_origin == "real"
+                              or bool(stored.get("real_source_connected")))
+            if stored_is_real or stored_origin == "documentation":
+                reason = (STAND_IN_REPLACES_REAL_MEASUREMENT if stored_is_real
+                          else STAND_IN_REPLACES_DOCUMENTATION)
+                next_action = (NEXT_ACTION_STAND_IN_REAL if stored_is_real
+                               else NEXT_ACTION_STAND_IN_DOCUMENTATION)
+                refusals.append({
+                    "capability": name,
+                    "reason": reason,
+                    "reason_text": (
+                        "a stand-in row for this capability would replace the stored real "
+                        "measurement already in this ledger" if stored_is_real else
+                        "a stand-in row for this capability would replace the stored "
+                        "documentation read already in this ledger"),
+                    "stored_origin": stored_origin,
+                    "stored_state": stored.get("state"),
+                    "stored_supported": bool(stored.get("supported")),
+                    "stored_observed_at": stored.get("observed_at"),
+                    "offending_origin": row.get("origin"),
+                    "offending_state": row.get("state"),
+                    "offending_stand_in": True,
+                    "next_action": next_action,
+                })
+                problems.append(
+                    f"{name}: {reason} — a labelled loopback stand-in answered this row, so "
+                    f"it is not a measurement and may never replace one (stored origin "
+                    f"{stored_origin!r}, state {stored.get('state')!r}). Nothing was "
+                    f"imported. Smallest next action: {next_action}")
+            continue                    # stored is neither real nor documentation: usual update
         if stored_origin not in MEASURED_PROBE_ORIGINS:
             # The stored row is itself a documentation read (or an origin the schema does
             # not know). A measured row supersedes it; a documentation re-read just
@@ -1009,7 +1095,7 @@ def probe_provenance(rows: list[dict]) -> dict:
     total = len(rows)
     if not total:
         return {"rows": 0, "real_source_connected": 0, "documentation_rows": 0,
-                "fixture_rows": 0, "supported": 0, "unmeasured": 0,
+                "fixture_rows": 0, "stand_in_rows": 0, "supported": 0, "unmeasured": 0,
                 "worker_self_measurements": 0,
                 "no_source_contacted": True,
                 "statement": ("No capability rows have been measured: no source has been "
@@ -1017,6 +1103,11 @@ def probe_provenance(rows: list[dict]) -> dict:
     connected = [r for r in rows if r.get("real_source_connected")]
     documentation = [r for r in rows if r.get("origin") == "documentation"]
     fixture = [r for r in rows if r.get("origin") in ("fixture", "mock")]
+    # Rows a labelled loopback stand-in answered (2026-10-09). They are ``origin: real``
+    # with ``real_source_connected: false``, so the source count already excludes them --
+    # but a reader has to be able to see that a *dry run* produced them, not a source, and
+    # the statement has to say so rather than letting them hide among "the rest".
+    stand_in = [r for r in rows if r.get("stand_in")]
     supported = [r for r in rows if r.get("supported")]
     unmeasured = [r for r in rows if r.get("state") == C.PROBE_UNMEASURED]
     # A supported row that contacted nothing is only allowed when it says it measured the
@@ -1027,15 +1118,22 @@ def probe_provenance(rows: list[dict]) -> dict:
         statement = (f"{len(connected)} of {total} capability rows answered from a real "
                      f"source; the rest did not.")
     else:
+        # Count-correct for one and for many: "1 is unmeasured", "4 are unmeasured" (defect
+        # fix, 2026-10-09 -- the sentence read "1 are unmeasured" for a single row).
+        unmeasured_clause = (f"{len(unmeasured)} is unmeasured" if len(unmeasured) == 1
+                             else f"{len(unmeasured)} are unmeasured")
         statement = (f"No source was contacted by any of the {total} capability rows: "
-                     f"{len(unmeasured)} are unmeasured"
+                     f"{unmeasured_clause}"
                      + (f", {len(documentation)} are documented-only reads"
                         if documentation else "")
                      + (f", {len(fixture)} came from recorded fixtures" if fixture else "")
+                     + (f", {len(stand_in)} came from a labelled loopback stand-in, which is "
+                        f"not the source" if stand_in else "")
                      + (_worker_self_clause(worker_self) if worker_self else "")
                      + ". Nothing here is an observation of Randy's Mac.")
     return {"rows": total, "real_source_connected": len(connected),
             "documentation_rows": len(documentation), "fixture_rows": len(fixture),
+            "stand_in_rows": len(stand_in),
             "supported": len(supported), "unmeasured": len(unmeasured),
             "worker_self_measurements": len(worker_self),
             "no_source_contacted": not connected, "statement": statement,
@@ -1258,6 +1356,22 @@ def probe_document_refusal(loaded: dict) -> dict:
             "ok": False}
 
 
+def row_is_a_stand_in(row) -> bool:
+    """Did a **labelled loopback stand-in** answer this row? (2026-10-09.)
+
+    Read from the row's own ``stand_in`` field where the Mini worker emits it, and from the
+    ``STAND-IN:`` label where a *stored* row is what is being described -- the ledger stores
+    the label (``mock_label``), not the flag, so a reader working from ``stored_probe_rows``
+    has to be able to tell a dry run from a source read. Either tell is enough.
+    """
+    if not isinstance(row, dict):
+        return False
+    if row.get("stand_in"):
+        return True
+    label = row.get("label") or row.get("mock_label")
+    return C.is_stand_in_label(label)
+
+
 def _provenance_row(row) -> dict:
     """One row, in the shape :func:`probe_provenance` needs to describe it.
 
@@ -1268,11 +1382,12 @@ def _provenance_row(row) -> dict:
     if not isinstance(row, dict):
         return {"origin": None, "supported": None, "state": None,
                 "real_source_connected": None, "measurement_target": None,
-                "capability": None, "source": None}
+                "stand_in": None, "capability": None, "source": None}
     return {"origin": row.get("origin"), "supported": row.get("supported"),
             "state": row.get("state"),
             "real_source_connected": row.get("real_source_connected"),
             "measurement_target": row.get("measurement_target", C.MEASUREMENT_SOURCE),
+            "stand_in": row_is_a_stand_in(row),
             "capability": row.get("capability") or row.get("name"),
             "source": row.get("source")}
 

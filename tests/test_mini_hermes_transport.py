@@ -441,7 +441,7 @@ class TestTheBearerKeyNeverLeavesTheEnvironment(HermesStandInCase):
         proc = subprocess.run(
             [sys.executable, "-m", "switchboard_mini", "hermes", "probe",
              "--out", rows_path],
-            capture_output=True, text=True, cwd=MINI,
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, cwd=MINI,
             env=dict(os.environ, PYTHONPATH=MINI,
                      SWITCHBOARD_MINI_STATE=state_path,
                      SWITCHBOARD_HERMES_STANDIN="1"))
@@ -636,7 +636,7 @@ class TestUnreachabilityIsSocketShapedNeverAMacReason(_CaseHelpers, unittest.Tes
         """T14: through the installed entry point (``python3 -m switchboard_mini``) too."""
         proc = subprocess.run(
             [sys.executable, "-m", "switchboard_mini", "hermes", "capabilities"],
-            capture_output=True, text=True, cwd=MINI,
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, cwd=MINI,
             env=dict(os.environ, PYTHONPATH=MINI))
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertNoTraceback(proc.stderr)
@@ -859,7 +859,7 @@ class TestThereIsNoGeneralRunSubmission(HermesStandInCase):
             self.assertFalse(hasattr(adapter, name), name)
         proc = subprocess.run(
             [sys.executable, "-m", "switchboard_mini", "hermes", "run", "--input", "hi"],
-            capture_output=True, text=True, cwd=MINI, env=dict(os.environ, PYTHONPATH=MINI))
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, cwd=MINI, env=dict(os.environ, PYTHONPATH=MINI))
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("invalid choice", proc.stderr)
         self.assertEqual(self.stub.requests, [])

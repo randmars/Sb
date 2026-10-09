@@ -49,7 +49,7 @@ class InstallScriptTests(unittest.TestCase):
         return env
 
     def run_installer(self, *args):
-        return subprocess.run(["sh", self.installer] + list(args), capture_output=True,
+        return subprocess.run(["sh", self.installer] + list(args), stdin=subprocess.DEVNULL, capture_output=True,
                               text=True, timeout=60, env=self.env())
 
     def prefix(self, name):
@@ -84,7 +84,7 @@ class InstallScriptTests(unittest.TestCase):
         self.assertEqual(self.run_installer("--prefix", prefix).returncode, 0)
         link = self.link_in(prefix)
         self.assertTrue(os.access(link, os.X_OK), "the installer must make the launcher runnable")
-        proc = subprocess.run([link, "version"], capture_output=True, text=True, timeout=60,
+        proc = subprocess.run([link, "version"], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60,
                               env=self.env(), cwd=self.tmp)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn(WORKER_VERSION, proc.stdout)

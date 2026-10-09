@@ -971,7 +971,7 @@ class TestCommandLine(unittest.TestCase):
         env.pop("SWITCHBOARD_WEB_TOKEN", None)
         env.update(env_extra or {})
         proc = subprocess.run([sys.executable, "-m", "grace", "--db", self.db, *args],
-                              cwd=REPO_ROOT, capture_output=True, text=True, env=env, timeout=60)
+                              cwd=REPO_ROOT, stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=60)
         return proc.returncode, proc.stdout, proc.stderr
 
     def test_pretty_is_accepted_before_and_after_the_subcommand(self) -> None:

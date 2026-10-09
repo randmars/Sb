@@ -103,7 +103,7 @@ def run_cli(*args: str, fixture: bool = False, state: str = None,
     env = dict(os.environ, PYTHONPATH=REPO_MINI)
     env["SWITCHBOARD_MINI_STATE"] = state or os.path.join(
         tempfile.mkdtemp(prefix="mini-cli-state-"), "state.json")
-    return subprocess.run(argv, capture_output=True, text=True, env=env, cwd=cwd)
+    return subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, cwd=cwd)
 
 
 def json_documents(proc: subprocess.CompletedProcess, case: str) -> list:
@@ -590,7 +590,7 @@ class TestSerialisationDefect(unittest.TestCase):
             "sys.exit(cli.main(['probe']))\n"
         )
         env = dict(os.environ, PYTHONPATH=REPO_MINI)
-        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+        proc = subprocess.run([sys.executable, "-c", code], stdin=subprocess.DEVNULL, capture_output=True, text=True,
                               env=env, cwd=REPO_MINI)
         self.assertEqual(proc.returncode, HARNESS_EXIT,
                          f"exit {proc.returncode}; stderr={proc.stderr}")

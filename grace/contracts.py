@@ -75,6 +75,17 @@ def is_fixture_label(value: Any) -> bool:
     return isinstance(value, str) and value.startswith(FIXTURE_LABEL_PREFIX)
 
 
+#: The Mini worker's third label (2026-10-09): a **labelled loopback stand-in** answered the
+#: row. The row's ``origin`` stays ``real`` (the real transport class produced it) while no
+#: source was contacted, so this label is the only visible tell in the label column -- and
+#: ``probe_row_problems`` refuses a ``stand_in`` row that does not carry it.
+STAND_IN_LABEL_PREFIX = "STAND-IN:"
+
+
+def is_stand_in_label(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith(STAND_IN_LABEL_PREFIX)
+
+
 def assert_labelled(origin: str, label: Any, where: str) -> None:
     """Enforce the labelling invariant. Raises AssertionError (a bug, not a state)."""
     if origin not in (MOCK, REAL, DOCUMENTATION, FIXTURE):
@@ -248,11 +259,18 @@ def probe_row_supported_claim_allowed(row: Mapping[str, Any]) -> bool:
     :meth:`grace.ingest.Ingest.import_probe_rows`, which refuses the whole import rather
     than storing one over-claiming row.
 
+    And one addition from the stand-in defect (2026-10-09): a row answered by a **labelled
+    loopback stand-in** (``stand_in: true``) may not be ``supported`` either. The stand-in is
+    not the source, so its answer is not an observation of anything, and support means an
+    observation held.
+
     The Mini worker holds the identical rule (``outcomes.probe_row_supported_claim_allowed``)
     and ``tests/test_shared_vocabulary.py`` asserts the two agree.
     """
     if not row.get("supported"):
         return True
+    if row.get("stand_in"):
+        return False
     if row.get("origin") == DOCUMENTATION:
         return False
     return True
