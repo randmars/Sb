@@ -55,12 +55,17 @@ below):
 * HTTP 429 -> ``rate_limited`` / ``rate_limited`` (O17: over the 10-run cap the server
   "rejected with HTTP 429", i.e. it rejects rather than queues -- the ledger owns the wait)
 * a request this worker timed out on -> ``retryable_error`` / ``request_timeout`` (our own
-  bound; no page in the pack names a timeout)
+  bound; no page in the pack names a timeout) -- **except for a POST**, where the request
+  had already been written and whether the gateway acted is unknown: that is
+  ``outcome_unknown`` / ``submission_not_confirmed`` (defect fix, audit finding 3)
 * connection refused -> ``offline`` / ``hermes_not_reachable``
 * a connection dropped after the request was written -> ``outcome_unknown`` /
   ``submission_not_confirmed`` (the only honest reading: re-send the **identical** payload
   under the **same** ``Idempotency-Key``, never a fresh key, never a guess that it failed)
 * a body that is not parsable -> ``permanent_error`` / ``unexpected_document_shape``
+* a POST whose response body could not be read at all -> ``outcome_unknown`` /
+  ``submission_not_confirmed`` for the same reason as a POST timeout (defect fix, audit
+  finding 3): a broken read of one's own response is not evidence that nothing happened
 * 409 -> ``permanent_error`` / ``idempotency_key_conflict`` (O17's documented code)
 
 ``stand_in`` exists for one purpose: exercising this transport's wire layer on a host that
@@ -251,6 +256,20 @@ DOCUMENTED_EVENT_NAMES = (
     "tool.started", "tool.completed", "message.interim", "message.delta",
     "run.completed", "run.interrupted", "approval.request", "subagent.start",
     "subagent.complete", "hermes.tool.progress")
+#: The terminal event names of a run: O17's own run lifecycle (``completed``, ``failed``,
+#: ``cancelled``, ``interrupted``). **This is the one truth for terminal detection** (defect
+#: fix, audit finding 4): terminal detection used to read only
+#: :data:`DOCUMENTED_EVENT_NAMES`, which names ``run.completed``/``run.interrupted`` and
+#: omits ``run.failed``/``run.cancelled``, so a stream ending in one of the two omitted
+#: names reported "no terminal event in window" -- understating what the worker actually
+#: saw. Detection counts from this tuple; whether a name is *documented* is derived from
+#: :data:`DOCUMENTED_EVENT_NAMES` and recorded separately, so an undocumented name is never
+#: silently upgraded into a documented one.
+TERMINAL_EVENT_NAMES = ("run.completed", "run.failed", "run.cancelled", "run.interrupted")
+#: Which of the terminal names O17's documented event vocabulary actually names. Derived,
+#: never written out a second time.
+DOCUMENTED_TERMINAL_EVENT_NAMES = tuple(name for name in TERMINAL_EVENT_NAMES
+                                        if name in DOCUMENTED_EVENT_NAMES)
 #: Our own bounds. No page names a timeout or a page cap; these are ours and are recorded
 #: as ours everywhere they appear.
 DEFAULT_TIMEOUT_S = 10
@@ -413,6 +432,16 @@ TYPED_STATES = {
         "meaning": "events arrived whose names are not in O17's documented vocabulary",
         "next_action": ("record the names: the vocabulary is a measurement on this build, "
                         "not a reading")},
+    "terminal_event_name_not_documented": {
+        "code": O.PARTIAL,
+        "meaning": ("the stream ended in a terminal run event whose name O17's documented "
+                    "event vocabulary does not name (run.failed / run.cancelled are the two "
+                    "gap names in it), so the run was observed to end but not under a "
+                    "documented terminal name"),
+        "next_action": ("record the name beside the row: the vocabulary on this build is a "
+                        "measurement, not a reading (O17 names run.completed and "
+                        "run.interrupted only)"),
+    },
     "not_in_recorded_scenario": {
         "code": O.UNSUPPORTED,
         "meaning": "the recorded fixture has no answer for this operation",
@@ -694,7 +723,20 @@ class HermesTransport(abc.ABC):
 
 
 class HttpHermesTransport(HermesTransport):
-    """Read-only talk to the Hermes gateway's HTTP API."""
+    """Read-only talk to the Hermes gateway's HTTP API.
+
+    **Stand-in honesty rests on construction, not on a flag a caller can forget** (defect
+    fix, audit finding 1). Three things make a transport a stand-in, and any one of them is
+    enough: the caller asked for it (``stand_in=True``), the environment asked for it
+    (``SWITCHBOARD_HERMES_STANDIN``), or **an ``opener`` was injected**. The injected opener
+    is the supported way to drive this transport against a stub gateway, and a caller who
+    injects one has, by construction, replaced the real responder -- so ``opener is not
+    None`` *is* "not the gateway". Deriving ``stand_in`` from the explicit flag alone meant
+    a caller who stubbed the socket and forgot ``stand_in=True`` minted documents with
+    ``source_contacted: true``, which the probe turns into ``origin: real`` /
+    ``real_source_connected: true`` / a ``supported: true`` row that Grace would import as a
+    real measurement of Randy's Mac. The flag is a courtesy; the construction is the fact.
+    """
 
     origin = O.REAL
     adapter_is_real = True
@@ -710,7 +752,8 @@ class HttpHermesTransport(HermesTransport):
         self._token = (self._token or "").strip()
         self.profile = profile
         self.timeout_s = int(timeout_s)
-        self.stand_in = bool(stand_in or standin_requested())
+        # See the class docstring: an injected opener is a stand-in by construction.
+        self.stand_in = bool(stand_in or standin_requested() or opener is not None)
         self._opener = opener
 
     # -- preconditions -----------------------------------------------------
@@ -805,31 +848,23 @@ class HttpHermesTransport(HermesTransport):
         try:
             response = self._request(operation, params, body, resolved_path, headers)
         except urllib.error.HTTPError as exc:
-            outcome = self._from_response(operation, _replay_for(exc), started, max_bytes)
+            outcome = self._from_response(operation, _replay_for(exc), started, max_bytes,
+                                          idempotency_key=idem, body=body)
         except urllib.error.URLError as exc:
             outcome = self._from_url_error(operation, exc, started,
-                                           idempotency_key=idem)
+                                           idempotency_key=idem, body=body)
         except socket.timeout as exc:
-            outcome = self._stamp(O.Outcome.retryable(
-                f"this worker's own {self.timeout_s}s timeout elapsed waiting for "
-                f"{operation}",
-                reason="request_timeout", duration_ms=_ms(started), data={
-                    "endpoint": ENDPOINTS[operation]["path"],
-                    "requests_made": 1,
-                    "timeout_s": self.timeout_s,
-                    "timeout_is_ours": True,
-                    "note": ("no page in the pack names an API-server timeout: this bound "
-                             "is this worker's own"),
-                },
-                next_action="raise --timeout and re-run"))
+            outcome = self._timeout_outcome(
+                operation, started=started,
+                detail=f"this worker's own {self.timeout_s}s timeout elapsed waiting for "
+                       f"{operation}",
+                idempotency_key=idem, body=body)
         except TimeoutError as exc:
-            outcome = self._stamp(O.Outcome.retryable(
-                f"the request to {operation} timed out after {self.timeout_s}s: "
-                f"{type(exc).__name__}",
-                reason="request_timeout", duration_ms=_ms(started),
-                data={"endpoint": ENDPOINTS[operation]["path"], "requests_made": 1,
-                      "timeout_s": self.timeout_s, "timeout_is_ours": True},
-                next_action="raise --timeout and re-run"))
+            outcome = self._timeout_outcome(
+                operation, started=started,
+                detail=f"the request to {operation} timed out after {self.timeout_s}s: "
+                       f"{type(exc).__name__}",
+                idempotency_key=idem, body=body)
         except (OSError, ValueError) as exc:
             outcome = self._stamp(O.Outcome.retryable(
                 f"the request to {operation} could not be completed: "
@@ -837,7 +872,8 @@ class HttpHermesTransport(HermesTransport):
                 reason="request_failed", duration_ms=_ms(started),
                 next_action="retry the read"))
         else:
-            outcome = self._from_response(operation, response, started, max_bytes)
+            outcome = self._from_response(operation, response, started, max_bytes,
+                                          idempotency_key=idem, body=body)
         if isinstance(outcome.data, dict):
             outcome.data.setdefault("path_resolved", resolved_path)
             outcome.data.setdefault("path_params_supplied",
@@ -872,12 +908,96 @@ class HttpHermesTransport(HermesTransport):
             outcome.data = payload
         return outcome
 
+    # -- the uncertain-outcome shape, reused wherever a POST's answer was lost -----------
+    def _timeout_outcome(self, operation: str, *, started: float, detail: str,
+                         idempotency_key: Optional[str] = None,
+                         body: Optional[dict] = None) -> O.Outcome:
+        """Our own timeout: a retryable read, unless it was a POST (audit finding 3).
+
+        For a GET, nothing was changed by the request and re-running the read is the whole
+        fix. For a POST the request had already been written when the clock ran out, so
+        whether the gateway acted is unknown and the row says so.
+        """
+        if ENDPOINTS[operation]["method"] == "POST":
+            return self._post_uncertain(
+                operation, started=started,
+                detail=(detail + ", and the request had already been written, so it is "
+                        "unknown whether the gateway accepted it"),
+                idempotency_key=idempotency_key, body=body,
+                extra={"timeout_s": self.timeout_s, "timeout_is_ours": True})
+        return self._stamp(O.Outcome.retryable(
+            detail, reason="request_timeout", duration_ms=_ms(started), data={
+                "endpoint": ENDPOINTS[operation]["path"],
+                "requests_made": 1,
+                "timeout_s": self.timeout_s,
+                "timeout_is_ours": True,
+                "note": ("no page in the pack names an API-server timeout: this bound "
+                         "is this worker's own"),
+            },
+            next_action="raise --timeout and re-run"))
+
+
+    def _post_uncertain(self, operation: str, *, started: float, detail: str,
+                        idempotency_key: Optional[str] = None,
+                        body: Optional[dict] = None,
+                        extra: Optional[dict] = None) -> O.Outcome:
+        """The honest state for a POST whose answer never arrived (audit finding 3).
+
+        The gateway may have created the run, so a timeout on a POST, or a response this
+        worker could not read, is **not** a failed read and **not** a retryable one: the
+        row says ``outcome_unknown`` / ``submission_not_confirmed`` and asks for the
+        identical payload under the same ``Idempotency-Key`` (O17: an identical retry
+        returns the original run_id with 202 + ``Idempotency-Replayed: true``). A fresh key
+        would create a second run instead of replaying the first.
+
+        The key value also travels in the ``next_action`` text, not only in
+        ``data['idempotency_key_used']``: this transport scrubs any recorded *value* under a
+        key name matching :data:`SECRET_KEY_PATTERN` (deliberately broad, and it matches
+        "key"), so the field the reader acts on is the one in the sentence -- exactly as the
+        already-correct dropped-connection branch does it.
+        """
+        payload = json.dumps(dict(body or {}), sort_keys=True)
+        data = {"requests_made": 1, "duration_ms": _ms(started),
+                "endpoint": ENDPOINTS[operation]["path"], "method": "POST",
+                "request_body_bytes": len(payload.encode("utf-8")),
+                "request_body_fingerprint": O.fingerprint(payload),
+                "resend_requires": ("the identical payload under the same Idempotency-Key "
+                                    "(O17: identical retry -> 202 + Idempotency-Replayed)"),
+                "assumption_of_failure": False}
+        data.update(extra or {})
+        if idempotency_key:
+            # Ours, and not a secret: the module docstring says so, and the retry is only
+            # safe because the reader can see which key to reuse.
+            data["idempotency_key_used"] = idempotency_key
+            data["idempotency_key_is_ours_and_is_not_a_secret"] = True
+        return self._stamp(O.Outcome.uncertain(
+            detail, reason="submission_not_confirmed", data=data,
+            next_action=("re-send the **identical** payload with the **same** "
+                         "Idempotency-Key"
+                         + (f" ({idempotency_key})" if idempotency_key else "")
+                         + ": O17 documents that an identical retry returns the original "
+                           "run_id with 202 + Idempotency-Replayed: true. Never a fresh key "
+                           "and never a guess that it failed")))
+
     def _from_response(self, operation: str, response, started: float,
-                       max_bytes: Optional[int]) -> O.Outcome:
+                       max_bytes: Optional[int], *,
+                       idempotency_key: Optional[str] = None,
+                       body: Optional[dict] = None) -> O.Outcome:
         status = getattr(response, "status", None) or getattr(response, "code", 0) or 0
         try:
             raw = response.read() if hasattr(response, "read") else b""
         except Exception as exc:                      # a body we could not read at all
+            if ENDPOINTS[operation]["method"] == "POST":
+                # The response arrived but this worker could not read it. That is not a
+                # failed read: the gateway may have created the run, so the honest state is
+                # the uncertain one (audit finding 3).
+                return self._post_uncertain(
+                    operation, started=started,
+                    detail=("the response to " + ENDPOINTS[operation]["path"] + " arrived "
+                            "but its body could not be read (" + type(exc).__name__ + "), "
+                            "so it is unknown whether the gateway accepted the request"),
+                    idempotency_key=idempotency_key, body=body,
+                    extra={"http_status": status})
             return self._stamp(O.Outcome.retryable(
                 f"the response body for {operation} could not be read: "
                 f"{type(exc).__name__}", reason="body_unreadable",
@@ -1011,7 +1131,8 @@ class HttpHermesTransport(HermesTransport):
             extra={"idempotency_header_seen": replay_header is not None})
 
     def _from_url_error(self, operation: str, exc, started: float, *,
-                        idempotency_key: Optional[str] = None) -> O.Outcome:
+                        idempotency_key: Optional[str] = None,
+                        body: Optional[dict] = None) -> O.Outcome:
         reason = getattr(exc, "reason", None)
         detail = f"{type(reason).__name__ if reason else type(exc).__name__}: {reason or exc}"
         refused = isinstance(reason, ConnectionRefusedError) or "refused" in str(reason).lower()
@@ -1023,6 +1144,17 @@ class HttpHermesTransport(HermesTransport):
             # urllib wraps a socket timeout in URLError, so it arrives here rather than at
             # the `except socket.timeout` branch below. No page in the pack names a
             # timeout: this bound is this worker's own and the state says so.
+            if ENDPOINTS[operation]["method"] == "POST":
+                # ... and for a POST the request was already written, so the timeout is not
+                # evidence that nothing happened (audit finding 3).
+                return self._post_uncertain(
+                    operation, started=started,
+                    detail=(f"this worker's own {self.timeout_s}s timeout elapsed waiting "
+                            f"for {ENDPOINTS[operation]['path']} ({detail}), and the request "
+                            "had already been written, so it is unknown whether the gateway "
+                            "accepted it"),
+                    idempotency_key=idempotency_key, body=body,
+                    extra={**data, "timeout_s": self.timeout_s, "timeout_is_ours": True})
             return self._stamp(O.Outcome.retryable(
                 f"this worker's own {self.timeout_s}s timeout elapsed waiting for "
                 f"{ENDPOINTS[operation]['path']}: {detail}",
@@ -1373,7 +1505,8 @@ __all__ = [
     "REFUSED_ASKS", "TOKEN_ENV", "BASE_URL_ENV", "STANDIN_ENV", "DEFAULT_BASE_URL",
     "DEFAULT_BASE_URL_SOURCE", "NEVER_READ_PATHS", "DOCUMENTED_PARAMS",
     "REQUIRED_PATH_PARAMS", "IDEMPOTENCY_KEY_MAX", "MAX_CONCURRENT_RUNS_DEFAULT",
-    "RUN_STATUSES", "RUN_TERMINAL_STATUSES", "DOCUMENTED_EVENT_NAMES", "DEFAULT_MAX_EVENTS",
+    "RUN_STATUSES", "RUN_TERMINAL_STATUSES", "DOCUMENTED_EVENT_NAMES",
+    "TERMINAL_EVENT_NAMES", "DOCUMENTED_TERMINAL_EVENT_NAMES", "DEFAULT_MAX_EVENTS",
     "DEFAULT_SETTLE_SECONDS", "token_env_name", "token_value", "token_present",
     "token_status_document", "base_url_from_env", "standin_requested", "profile_prefix",
     "resolve_path", "unsubstituted_placeholders", "validate_idempotency_key", "scrub_secrets",

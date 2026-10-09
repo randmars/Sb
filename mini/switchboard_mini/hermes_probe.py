@@ -25,8 +25,10 @@ Four of the eight assertions cannot be fully evaluated by the adapter alone, and
 say so rather than rounding up:
 
 * ``hermes_run_submission_and_status`` and ``hermes_run_progress_events`` need a run id the
-  owner named, or the explicit ``--submit-test-run`` consent. Without either, the row is a
-  typed refusal naming what is missing.
+  owner named, or the explicit ``--submit-test-run`` consent. The run this probe creates
+  under that consent is recorded in the run's shared context, so the run-scoped rows (events
+  and stop) read *that* run rather than refusing for a missing id (audit finding 2). With
+  neither an id nor the consent, the row is a typed refusal naming what is missing.
 * ``hermes_session_continuity``'s assertion has two halves: the session reads' shape (this
   adapter measures it) and *a resumed run echoing its ``session_id`` plus
   ``X-Hermes-Session-Key`` being accepted* (that needs a run carrying session history, so
@@ -50,6 +52,14 @@ from __future__ import annotations
 from typing import Optional
 
 from . import outcomes as O
+#: The closed set of terminal event names for a run. **One constant is the truth** (defect
+#: fix, audit finding 4): it lives in ``hermes_transport`` beside O17's documented event
+#: vocabulary and is imported here rather than re-typed, so terminal detection and the
+#: documented/undocumented split can never drift apart -- ``run.failed`` and
+#: ``run.cancelled`` are terminal and are not names O17's event vocabulary lists, and the
+#: row says exactly that instead of reporting "no terminal event". Re-exported below so
+#: ``hermes_probe.TERMINAL_EVENT_NAMES`` keeps working for callers of this module.
+from .hermes_transport import TERMINAL_EVENT_NAMES
 from .probe import _blocked_row, _row
 
 #: O19's toolset names, as written on that page, and O17's documented toolset shape keys.
@@ -66,8 +76,6 @@ OWNER_APPROVAL_TRIGGER_COMMAND = "bash -c 'echo probe'"
 #: The closed set of owner observations for the approval half. Free text would let a row
 #: claim support from a sentence; a closed set cannot.
 APPROVAL_OBSERVATIONS = ("waiting_for_approval", "instant_deny", "not_reproducible")
-#: The closed set of terminal event names for a run (O17).
-TERMINAL_EVENT_NAMES = ("run.completed", "run.failed", "run.cancelled", "run.interrupted")
 
 
 def _adapter(context):
@@ -129,6 +137,12 @@ def _measured(context, capability, outcome, *, supported: bool, limitation: str,
                 supersedes=_supersedes(capability),
                 values_from_source=(None if values_from_source is None
                                     else bool(values_from_source)),
+                # Defect fix (audit finding 5): the row's ``real_source_connected`` is the
+                # outcome's own ``source_contacted``, not a re-derivation in ``probe._row``
+                # from ``adapter_is_real`` + ``values_from_source``. One flag, kept honest by
+                # the transport (which derives it from construction, audit finding 1), read
+                # straight through to the row.
+                source_contacted=bool(outcome.source_contacted),
                 observed_version=observed_version,
                 observed_version_reason=observed_version_reason)
 
@@ -358,6 +372,11 @@ def probe_run_submission_and_status(context, capability) -> dict:
         return _blocked(context, capability, first, evidence)
     first_doc = _document(first) or {}
     first_id = _run_id_of(first)
+    # Audit finding 2: the run this probe just created is recorded in this run's context, so
+    # the run-scoped rows (events, stop) read the run the probe actually created. Without
+    # this they refused for a missing run id and advised the reader to pass the flag they
+    # had already passed -- a dead end dressed as guidance.
+    context.hermes_note_created_run_id(first_id)
     status = first_doc.get("status") if isinstance(first_doc, dict) else None
     evidence.update({
         "submission_http_status": (first.data or {}).get("http_status"),
@@ -367,6 +386,7 @@ def probe_run_submission_and_status(context, capability) -> dict:
         "run_id_present": bool(first_id),
         "run_id_fingerprint": O.fingerprint(str(first_id)) if first_id else None,
         "run_id_value_withheld": True,
+        "created_run_id_recorded_for_the_run_scoped_rows": bool(first_id),
     })
     # O17: "An identical retry returns the original run_id with HTTP 202 and
     # `Idempotency-Replayed: true`". The retry is the identical payload under the SAME key
@@ -467,15 +487,20 @@ def probe_run_progress_events(context, capability) -> dict:
     run_id = context.hermes_run_id()
     if not run_id:
         return _blocked(context, capability, _REFUSE_RUN_ID(
-            "hermes_run_progress_events"), {
+            "hermes_run_progress_events", consent=context.hermes_submit_test_run()), {
             "endpoint": "/v1/runs/{run_id}/events", "endpoint_ref": "O17",
-            "run_id_supplied": False})
+            "run_id_supplied": False,
+            "run_id_supplied_by": context.hermes_run_id_source()})
     got = adapter.run_events(run_id)
     evidence = _base_evidence(adapter, got)
     evidence.update({
         "endpoint": "/v1/runs/{run_id}/events",
         "endpoint_ref": "O17",
         "run_id_supplied": True,
+        # Who the id came from: the owner's --run-id, or the run this probe created for
+        # itself under --submit-test-run (audit finding 2). The row never implies the owner
+        # named an id he did not.
+        "run_id_supplied_by": context.hermes_run_id_source(),
         "run_id_fingerprint": O.fingerprint(str(run_id)),
         "documented_event_counts": (got.data or {}).get("documented_event_counts"),
         "undocumented_event_counts": (got.data or {}).get("undocumented_event_counts"),
@@ -497,8 +522,25 @@ def probe_run_progress_events(context, capability) -> dict:
     counts = (got.data or {}).get("documented_event_counts") or {}
     undocumented = (got.data or {}).get("undocumented_event_counts") or {}
     total = (got.data or {}).get("event_count") or 0
-    terminal = sorted(name for name in TERMINAL_EVENT_NAMES if name in counts)
-    evidence.update({"terminal_event_names_seen": terminal})
+    # Terminal detection counts from the one terminal-name constant, over *both* the
+    # documented and the not-documented names the stream carried (audit finding 4: it used
+    # to read only the documented counts, so a stream ending in `run.failed` -- a terminal
+    # name O17's event vocabulary does not list -- reported "no terminal event in window").
+    # Which names are documented is recorded separately and never upgraded.
+    terminal = sorted(name for name in TERMINAL_EVENT_NAMES
+                      if name in counts or name in undocumented)
+    documented_terminal = [name for name in terminal if name in counts]
+    undocumented_terminal = [name for name in terminal if name in undocumented]
+    evidence.update({
+        "terminal_event_names_seen": terminal,
+        "terminal_event_names_documented": documented_terminal,
+        "terminal_event_names_not_documented": undocumented_terminal,
+        "terminal_event_names_all": list(TERMINAL_EVENT_NAMES),
+        "terminal_event_names_documented_in_o17": list(O_DOCUMENTED_TERMINAL_EVENTS()),
+        "terminal_detection_reads_one_constant": True,
+        "terminal_detection_covers_undocumented_names": True,
+        "undocumented_terminal_name_is_not_presented_as_documented": True,
+    })
     if not first_connected(got):
         return _not_a_real_measurement(
             context, capability, got, evidence,
@@ -539,9 +581,33 @@ def probe_run_progress_events(context, capability) -> dict:
                                        "poll GET /v1/runs/{run_id} for the settled status"),
                          evidence=evidence, observed_version=_version_for(context),
                          observed_version_reason=_version_reason(context))
+    if not documented_terminal:
+        # The stream ended in a terminal name that O17's event vocabulary does not list.
+        # That is a finding, not a pass: the run was observed to end, and the documented
+        # terminal name was not the one observed.
+        return _measured(context, capability, got, supported=False,
+                         state=O.PARTIAL,
+                         state_reason="terminal_event_name_not_documented",
+                         limitation=("documented progress events arrived and the stream "
+                                     "ended in a terminal run event, but its name ("
+                                     + ", ".join(undocumented_terminal)
+                                     + ") is not one O17's documented event vocabulary "
+                                       "names (documented terminal names: "
+                                     + ", ".join(O_DOCUMENTED_TERMINAL_EVENTS())
+                                     + "), so the run was observed to end without the "
+                                       "documented terminal name. Recorded as a finding "
+                                       "about this build's vocabulary, not presented as a "
+                                       "documented name"),
+                         evidence=evidence, observed_version=_version_for(context),
+                         observed_version_reason=_version_reason(context))
     return _measured(context, capability, got, supported=True, limitation=None,
                      evidence=evidence, observed_version=_version_for(context),
                      observed_version_reason=_version_reason(context))
+
+
+def O_DOCUMENTED_TERMINAL_EVENTS():
+    from .hermes_transport import DOCUMENTED_TERMINAL_EVENT_NAMES
+    return DOCUMENTED_TERMINAL_EVENT_NAMES
 
 
 def O_DOCUMENTED_EVENTS():
@@ -555,9 +621,11 @@ def probe_run_stop(context, capability) -> dict:
     adapter = _adapter(context)
     run_id = context.hermes_run_id()
     if not run_id:
-        return _blocked(context, capability, _REFUSE_RUN_ID("hermes_run_stop"), {
+        return _blocked(context, capability, _REFUSE_RUN_ID(
+            "hermes_run_stop", consent=context.hermes_submit_test_run()), {
             "endpoint": "/v1/runs/{run_id}/stop", "endpoint_ref": "O17",
-            "run_id_supplied": False})
+            "run_id_supplied": False,
+            "run_id_supplied_by": context.hermes_run_id_source()})
     got = adapter.stop(run_id, settle_seconds=context.hermes_settle_seconds(),
                        interval=context.hermes_settle_interval())
     evidence = _base_evidence(adapter, got)
@@ -565,6 +633,7 @@ def probe_run_stop(context, capability) -> dict:
         "endpoint": "/v1/runs/{run_id}/stop",
         "endpoint_ref": "O17",
         "run_id_supplied": True,
+        "run_id_supplied_by": context.hermes_run_id_source(),
         "run_id_fingerprint": O.fingerprint(str(run_id)),
         "stop_response_status": (got.data or {}).get("stop_response_status"),
         "status_sequence": (got.data or {}).get("status_sequence"),
@@ -952,19 +1021,36 @@ def first_connected(outcome) -> bool:
     return bool(getattr(outcome, "real_source_connected", False))
 
 
-def _REFUSE_RUN_ID(capability_name: str):
-    """Refuse a run-scoped row that has no run id: the worker cannot invent one."""
+def _REFUSE_RUN_ID(capability_name: str, *, consent: bool = False):
+    """Refuse a run-scoped row that has no run id: the worker cannot invent one.
+
+    The advice has to be a step that can actually unblock the row (audit finding 2). When
+    the caller *did* pass ``--submit-test-run`` and still has no run id, telling them to
+    pass it again is a dead end dressed as guidance: the honest advice is to read what the
+    submission answered and pass the id it returned by hand.
+    """
+    if consent:
+        # No mention of the consent flag itself: it has already been supplied, and the point
+        # of this fix is that a refusal never names a step the reader cannot take.
+        next_action = (
+            "no run id came back from POST /v1/runs, so no run-scoped read can be "
+            "addressed yet: read the hermes_run_submission_and_status row (its state "
+            "explains what the submission answered), then re-run with --run-id <the id "
+            "that run has>")
+    else:
+        next_action = ("start a trivial run yourself (POST /v1/runs with the same "
+                       "Idempotency-Key, O17), then re-run with --run-id <the run id>; or "
+                       "pass --submit-test-run to let this probe create its own frozen "
+                       "constant run")
     return O.Outcome.unsupported(
         f"{capability_name} acts on a run the owner names, and no run id was supplied: "
         "this worker creates no run but its own frozen probe constant, so it will not "
         "pick an arbitrary run and report its behaviour as this capability's.",
         reason="run_id_required",
         data={"asked_for": capability_name, "requests_made": 0,
-              "no_request_made": True},
-        next_action=("start a trivial run yourself (POST /v1/runs with the same "
-                     "Idempotency-Key, O17), then re-run with --run-id <the run id>; or "
-                     "pass --submit-test-run to let this probe create its own frozen "
-                     "constant run"))
+              "no_request_made": True,
+              "submit_test_run_consent_supplied": bool(consent)},
+        next_action=next_action)
 
 
 HERMES_PROBES = {

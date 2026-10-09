@@ -255,7 +255,7 @@ AppleScript in `switchboard_mini/mail_transport.py`, one script per operation, r
 python3 -m unittest discover -s tests -t .        # from the repository root
 ```
 
-The whole suite is **424 tests** in a fresh checkout; the number to trust is whatever that
+The whole suite is **440 tests** in a fresh checkout; the number to trust is whatever that
 command prints, so run it rather than believing this line. The Mini tests are
 `tests/test_mini_probe.py` (the row contract, the typed states, the labelling of every row by
 what it actually contacted, and the citations), `tests/test_mini_mail.py` (the Mail adapter
