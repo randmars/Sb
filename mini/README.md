@@ -145,8 +145,11 @@ switchboard-mini --fixture-mode list --account "FIXTURE Account A" --mailbox INB
 ```
 
 The four **Mail** recorded scenarios live in `switchboard_mini/fixtures/mail/*.json`, the four
-**Beeper** ones in `switchboard_mini/fixtures/beeper/*.json`, and the nine **Contacts** ones in
-`switchboard_mini/fixtures/contacts/*.json` — 17 in all. They are **synthetic**: invented data on
+**Beeper** ones in `switchboard_mini/fixtures/beeper/*.json`, the nine **Contacts** ones in
+`switchboard_mini/fixtures/contacts/*.json`, and the seven **Hermes** ones in
+`switchboard_mini/fixtures/hermes/*.json` (`healthy`, `token_rejected`, `gateway_down`,
+`endpoint_absent`, `rate_limited`, `idempotency_replay`, `events_without_terminal`) — 24 in
+all. They are **synthetic**: invented data on
 reserved `.test` domains (and invented record shapes for the non-mail sources) in the shape the
 transport returns. They are not a recording of Randy's mailbox, address book or Beeper install,
 and every document produced from them carries a `FIXTURE:` label, `real_source_connected: false`
@@ -154,16 +157,22 @@ and a disclaimer naming the source that was *not* contacted. The permission-deni
 scenarios reproduce the exact `osascript` failure text for `-1743` and `-600`, so the same
 classification code that runs on the Mac is exercised by the tests here.
 
-**What `probe` answers in this mode.** 38 rows, and the split changed with the Contacts slice:
+**What `probe` answers in this mode.** 38 rows, and the split changed with the Hermes slice:
 
 | | rows | what they are |
 |---|---|---|
-| adapter-measured | **25** | 16 Mail (including the worker's own `manifest` self-measurement), 4 Beeper, 5 Contacts — `origin: fixture`, `supported: false` except the manifest row |
-| documentation-only | **13** | the 8 Hermes rows (no adapter exists yet) and the 5 Beeper rows this read-only slice deliberately does not build (send, send reconciliation, attachment materialisation, composer prefill, live event stream) — `origin: documentation`, `supported: false`, `state: unmeasured` |
+| adapter-measured | **33** | 16 Mail (including the worker's own `manifest` self-measurement), 4 Beeper, 5 Contacts, 8 Hermes — `origin: fixture`, `supported: false` except the manifest row |
+| documentation-only | **5** | the 5 Beeper rows this read-only slice deliberately does not build (send, send reconciliation, attachment materialisation, composer prefill, live event stream) — `origin: documentation`, `supported: false`, `state: unmeasured` |
 
 `supported: true` appears on exactly one row, the worker's own manifest self-measurement. The
 split is derived from which adapter declares which capability (`MEASURED_CAPABILITIES` in each
 adapter), not from a list kept in the tests.
+
+Hermes is the one source that is **not** Mac-bound: its adapter reaches an OpenAI-compatible
+gateway over a socket, so on a host with no gateway and no bearer key its rows are refused with
+its own named reasons (`token_absent`, `hermes_not_reachable`, `run_id_required`, …) and
+`state: permission_denied`/`unsupported` — never `host_not_macos`, which would assert a fact no
+pack record states.
 
 ## Commands
 
@@ -178,6 +187,7 @@ adapter), not from a list kept in the tests.
 | `manifest [--probe-result FILE]` | capability manifest; without probe rows every capability is `unverified` |
 | `beeper …` | read-only Beeper Desktop local API — `token`, `info`, `introspect`, `health`, `search`, `messages`, `contacts`, `probe`; `accounts`/`chats` refuse `endpoint_not_in_pack`. See the Beeper section below |
 | `contacts …` | read-only Contacts — `authorization`, `request-access`, `health`, `enumerate`, `restricted-keys`, `change-history`, `probe`. See the Contacts section below |
+| `hermes …` | read-only Hermes gateway reads — `token`, `capabilities`, `toolsets`, `skills`, `health`, `health --detailed`, `health-v1`, `sessions`, `session`, `session-messages`, `run-status`, `events`, `stop`, `approval`, `probe`; `jobs`/`models`/`model-options`/`responses` refuse `endpoint_not_in_pack` and `chat-completions`/`session-mutations` refuse `not_the_control_surface`. It contacts nothing without a bearer key in the environment, and the only run it will ever create is the probe's frozen test run behind `--submit-test-run` |
 | `version` | worker and probe-contract versions |
 
 ### `run` and launchd
@@ -245,7 +255,7 @@ AppleScript in `switchboard_mini/mail_transport.py`, one script per operation, r
 python3 -m unittest discover -s tests -t .        # from the repository root
 ```
 
-The whole suite is **420 tests** in a fresh checkout; the number to trust is whatever that
+The whole suite is **424 tests** in a fresh checkout; the number to trust is whatever that
 command prints, so run it rather than believing this line. The Mini tests are
 `tests/test_mini_probe.py` (the row contract, the typed states, the labelling of every row by
 what it actually contacted, and the citations), `tests/test_mini_mail.py` (the Mail adapter
