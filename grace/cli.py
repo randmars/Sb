@@ -194,7 +194,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="store one Mini capability-probe run (Gate 2) against an account, refusing any "
              "row that over-claims")
     pi.add_argument("--file", required=True,
-                    help="a JSON document with a 'rows' list (switchboard-mini probe --json)")
+                    help="a JSON document with a 'rows' list. The Mini worker writes "
+                         "JSONL, one row per line: `switchboard-mini probe --account "
+                         "<label> --out rows.jsonl` — there is no `--json` flag. Wrap it "
+                         "before importing: `jq -s '{rows: .}' rows.jsonl > rows.json`")
     pi.add_argument("--account", required=True, help="the source_account_id these rows describe")
     pi.add_argument("--actor", default="probe-import")
 
@@ -320,17 +323,29 @@ def _dispatch(svc: Grace, args: argparse.Namespace, cmd: str, pretty: bool) -> i
         # Above the store: a malformed or over-claiming document is a typed refusal, never a
         # partial import and never an exception.
         result = import_probe_rows(svc.store, args.account, rows, actor=args.actor)
+        superseded = result.get("supersessions") or []
         if result["ok"]:
             svc.store.audit(actor=args.actor, operation="probe_import",
                             entity_kind="source_account", entity_id=args.account,
                             reason=f"{result['imported']} capability row(s) imported",
                             details={"imported": result["imported"],
-                                     "provenance": result["provenance"]})
-        return _print(emit(cmd, ok=result["ok"], data=result,
-                           message=(f"{result['imported']} probe row(s) stored for "
-                                    f"{args.account}" if result["ok"] else
-                                    f"refused: {len(result['problems'])} problem(s), nothing "
-                                    f"stored")), pretty)
+                                     "provenance": result["provenance"],
+                                     "supersessions": [s["capability"] for s in superseded]})
+            message = f"{result['imported']} probe row(s) stored for {args.account}"
+            if superseded:
+                # Reported, never silent: a measurement took the place of a stored
+                # documentation read for these capability keys.
+                message += (f"; superseded the stored documentation row for "
+                            f"{', '.join(s['capability'] for s in superseded)}")
+        else:
+            refusals = result.get("refusals") or []
+            message = (f"refused: {len(result['problems'])} problem(s), nothing stored")
+            if refusals:
+                reasons = sorted({r["reason"] for r in refusals})
+                message += (f"; {len(refusals)} documentation row(s) would replace a stored "
+                            f"measurement ({', '.join(reasons)}). Smallest next action: "
+                            f"{refusals[0]['next_action']}")
+        return _print(emit(cmd, ok=result["ok"], data=result, message=message), pretty)
     if cmd == "reap":
         reaped = svc.ledger.reap_expired_leases()
         return _print(emit(cmd, data={"reaped": reaped, "counts": svc.ledger.counts()},

@@ -852,6 +852,112 @@ def probe_row_problems(row: dict) -> list[str]:
     return problems
 
 
+# ------------------------------------------------------- the probe handover ----
+# One probe run emits one row per capability key, and the capability key is what the
+# ledger stores. So two things have to be explicit when rows cross from the worker to
+# Grace, and neither may happen silently:
+#
+#   * a **measured** row (``real``/``fixture``/``mock``) that arrives for a capability
+#     whose stored row is a documentation read **supersedes** it -- that is the handover
+#     the worker names in the row's own ``supersedes`` field, and it is reported;
+#   * a **documentation** row that arrives for a capability the ledger already holds a
+#     *measurement* for is **refused**, because a page read may never replace an
+#     observation. Nothing is written and the refusal names its reason and the smallest
+#     next action -- the two ways of "keeping both as disagreeing rows" (storing the
+#     page read beside the measurement, or overwriting the measurement with it) are both
+#     closed here.
+
+#: Origins that are evidence of a read rather than of a page.
+MEASURED_PROBE_ORIGINS = ("real", "fixture", "mock")
+
+#: The typed refusals, one per kind of stored measurement a documentation read would
+#: replace. Named so a person or a script can act on the reason alone.
+DOCUMENTATION_REPLACES_REAL_MEASUREMENT = "documentation_would_replace_a_real_measurement"
+DOCUMENTATION_REPLACES_MEASUREMENT = "documentation_would_replace_a_measurement"
+
+NEXT_ACTION_REAL_MEASUREMENT = (
+    "keep the stored real measurement: re-import the run that measured this capability on "
+    "the Mac (the Mini worker's `probe` re-emits the measured row), or remove that stored "
+    "row deliberately before importing a documentation read — a page read may not replace "
+    "an observation")
+NEXT_ACTION_MEASUREMENT = (
+    "re-run the probe with the adapter that measured this capability in the run (the run "
+    "that produced this documentation row had no adapter for it), or import only the rows "
+    "the run measured")
+
+
+def probe_row_handover(store: Store, account_id: str, rows: Iterable[dict]) -> dict:
+    """What this import would supersede, and what it may not replace.
+
+    Pure read: nothing is written here. Returns the supersessions (informational, applied
+    by the import) and the refusals (nothing is applied at all if there are any).
+    """
+    supersessions: list[dict] = []
+    refusals: list[dict] = []
+    problems: list[str] = []
+    for row in rows:
+        name = row.get("capability") or row.get("name")
+        if not name:
+            continue                    # probe_row_problems already refuses this row
+        stored = store.one(
+            "SELECT name, origin, state, supported, observed_at, real_source_connected "
+            "FROM capability WHERE account_id = ? AND name = ?", (account_id, name))
+        if stored is None:
+            continue                    # first row for this capability key: nothing to hand over
+        stored_origin = stored.get("origin")
+        if stored_origin not in MEASURED_PROBE_ORIGINS:
+            # The stored row is itself a documentation read (or an origin the schema does
+            # not know). A measured row supersedes it; a documentation re-read just
+            # replaces a page read with a page read.
+            if (row.get("origin") in MEASURED_PROBE_ORIGINS
+                    and row.get("origin") != stored_origin):
+                supersessions.append({
+                    "capability": name,
+                    "superseded_origin": stored_origin,
+                    "superseded_state": stored.get("state"),
+                    "superseded_supported": bool(stored.get("supported")),
+                    "superseded_observed_at": stored.get("observed_at"),
+                    "superseding_origin": row.get("origin"),
+                    "superseding_supported": bool(row.get("supported")),
+                    "superseding_real_source_connected":
+                        bool(row.get("real_source_connected")),
+                    "note": ("the stored documentation row for this capability is replaced "
+                             "by this measured row: a measurement supersedes a page read. "
+                             "This is reported rather than silent, and the two rows never "
+                             "coexist in the ledger"),
+                })
+            continue
+        if row.get("origin") != "documentation":
+            continue                    # measurement replaces measurement: the usual update
+        real = (stored_origin == "real" or bool(stored.get("real_source_connected")))
+        reason = (DOCUMENTATION_REPLACES_REAL_MEASUREMENT if real
+                  else DOCUMENTATION_REPLACES_MEASUREMENT)
+        next_action = (NEXT_ACTION_REAL_MEASUREMENT if real else NEXT_ACTION_MEASUREMENT)
+        refusals.append({
+            "capability": name,
+            "reason": reason,
+            "reason_text": (
+                "a documentation row for this capability would replace the stored real "
+                "measurement already in this ledger" if real else
+                "a documentation row for this capability would replace the stored "
+                "measurement already in this ledger"),
+            "stored_origin": stored_origin,
+            "stored_state": stored.get("state"),
+            "stored_supported": bool(stored.get("supported")),
+            "stored_observed_at": stored.get("observed_at"),
+            "offending_origin": row.get("origin"),
+            "offending_state": row.get("state"),
+            "next_action": next_action,
+        })
+        problems.append(
+            f"{name}: {reason} — a documentation read may never replace a stored "
+            f"measurement (stored origin {stored_origin!r}, state "
+            f"{stored.get('state')!r}). Nothing was imported. Smallest next action: "
+            f"{next_action}")
+    return {"supersessions": supersessions, "refusals": refusals,
+            "problems": sorted(problems)}
+
+
 def probe_provenance(rows: list[dict]) -> dict:
     """What a set of probe rows honestly says about where its values came from.
 
@@ -895,6 +1001,14 @@ def import_probe_rows(store: Store, account_id: str, rows: Iterable[dict], *,
     All-or-nothing on purpose: a partially imported probe would leave the review surfaces
     describing a machine that was never measured. Returns a result dict; raises nothing for
     bad input (an import of a malformed document is a typed refusal, not a crash).
+
+    Two handover rules decide what may happen to a row already stored for the same
+    capability key (see ``probe_row_handover``): a measured row supersedes a stored
+    documentation row, and that supersession is reported in ``supersessions``; a
+    documentation row may never replace a stored measurement, so it refuses the import
+    (type ``refusals``, each with its reason and the smallest next action). A row that
+    over-claims still refuses everything; nothing is ever silently overwritten and two
+    disagreeing rows for one capability never coexist.
     """
     rows = list(rows)
     problems = [p for row in rows for p in probe_row_problems(row)]
@@ -902,14 +1016,21 @@ def import_probe_rows(store: Store, account_id: str, rows: Iterable[dict], *,
         {"origin": row.get("origin"), "supported": row.get("supported"),
          "state": row.get("state"), "real_source_connected": row.get("real_source_connected"),
          "source": row.get("source")} for row in rows])
+    refused_result = {"imported": 0, "refused": len(rows), "provenance": provenance,
+                      "supersessions": [], "refusals": [], "ok": False}
     if problems:
-        return {"imported": 0, "refused": len(rows), "problems": sorted(problems),
-                "provenance": provenance, "ok": False}
+        return {**refused_result, "problems": sorted(problems)}
     if not store.one("SELECT account_id FROM source_account WHERE account_id = ?",
                      (account_id,)):
-        return {"imported": 0, "refused": len(rows),
-                "problems": [f"no source_account {account_id!r} in this ledger"],
-                "provenance": provenance, "ok": False}
+        return {**refused_result,
+                "problems": [f"no source_account {account_id!r} in this ledger"]}
+    # The handover with what is already stored: a measurement supersedes a stored
+    # documentation row (reported), and a documentation row may never replace a stored
+    # measurement (refused, typed, with the smallest next action). Read-only.
+    handover = probe_row_handover(store, account_id, rows)
+    if handover["refusals"]:
+        return {**refused_result, "problems": handover["problems"],
+                "refusals": handover["refusals"]}
     with store.tx():
         for row in rows:
             name = row.get("capability") or row.get("name")
@@ -932,7 +1053,7 @@ def import_probe_rows(store: Store, account_id: str, rows: Iterable[dict], *,
                 "sourced_refs": C.canonical_json(list(row.get("citations") or [])),
             }, ["account_id", "name"])
     return {"imported": len(rows), "refused": 0, "problems": [], "provenance": provenance,
-            "ok": True}
+            "supersessions": handover["supersessions"], "refusals": [], "ok": True}
 
 def stored_probe_rows(store: Store) -> list[dict]:
     """Every capability row in the ledger, shaped for :func:`probe_provenance`."""

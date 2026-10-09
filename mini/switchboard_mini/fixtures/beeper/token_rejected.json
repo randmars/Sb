@@ -1,0 +1,14 @@
+{
+  "scenario": "token_rejected",
+  "note": "Synthetic recording: the recorded run had a token configured, and the recorded API answered 401 for every documented read. It is NOT a capture of Randy's Beeper Desktop. No token value is stored in this file or in any other fixture — only the fact that one was configured.",
+  "label": "FIXTURE:beeper(recorded scenario 'token_rejected')",
+  "base_url": "http://localhost:23373",
+  "token_present": true,
+  "host_platform": "fixture-macos",
+  "responses": {
+    "introspect": {"status": 200, "json": {"active": false}},
+    "info": {"status": 401, "json": {"error": "fixture: unauthorized"}},
+    "search": {"status": 401, "json": {"error": "fixture: unauthorized"}},
+    "contacts": {"status": 401, "json": {"error": "fixture: unauthorized"}}
+  }
+}
