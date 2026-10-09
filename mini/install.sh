@@ -11,19 +11,34 @@ set -eu
 
 PREFIX="$HOME/.local"
 ACTION=install
-for arg in "$@"; do
-  case "$arg" in
-    --prefix=*) PREFIX="${arg#--prefix=}" ;;
-    --prefix) shift ;;
+# Parse argv positionally, so `--prefix DIR` and `--prefix=DIR` both work and neither
+# depends on being the *first* argument. The earlier version consumed the value with a
+# bare `shift` inside a `for arg in "$@"` loop (which drops it) and only recovered it
+# when `--prefix` happened to be `$1`, so `sh mini/install.sh --uninstall --prefix DIR`
+# silently used the default prefix instead. Nothing about the default prefix or
+# --uninstall changes here.
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --prefix=*) PREFIX="${1#--prefix=}" ;;
+    --prefix)
+      if [ "$#" -lt 2 ]; then
+        echo "install: --prefix needs a directory, e.g. 'sh mini/install.sh --prefix DIR'" >&2
+        exit 2
+      fi
+      PREFIX="$2"
+      shift
+      ;;
     --uninstall) ACTION=uninstall ;;
     -h|--help)
-      echo "usage: sh mini/install.sh [--prefix DIR] [--uninstall]"
+      echo "usage: sh mini/install.sh [--prefix DIR] [--prefix=DIR] [--uninstall]"
       exit 0 ;;
     *) ;;
   esac
+  shift
 done
-if [ "${1:-}" = "--prefix" ] && [ -n "${2:-}" ]; then
-  PREFIX="$2"
+if [ -z "${PREFIX:-}" ]; then
+  echo "install: the prefix is empty; pass a directory (--prefix DIR)" >&2
+  exit 2
 fi
 
 HERE=$(cd -P "$(dirname "$0")" && pwd)

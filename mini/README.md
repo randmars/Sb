@@ -144,12 +144,26 @@ switchboard-mini --fixture-mode --fixture-scenario partial_history probe
 switchboard-mini --fixture-mode list --account "FIXTURE Account A" --mailbox INBOX --limit 2
 ```
 
-The four recorded scenarios live in `switchboard_mini/fixtures/mail/*.json`. They are
-**synthetic**: invented data on reserved `.test` domains in the shape the transport returns.
-They are not a recording of Randy's mailbox, and every document produced from them carries a
-`FIXTURE:` label, `real_source_connected: false` and a disclaimer. The permission-denied and
-offline scenarios reproduce the exact `osascript` failure text for `-1743` and `-600`, so the
-same classification code that runs on the Mac is exercised by the tests here.
+The four **Mail** recorded scenarios live in `switchboard_mini/fixtures/mail/*.json`, the four
+**Beeper** ones in `switchboard_mini/fixtures/beeper/*.json`, and the nine **Contacts** ones in
+`switchboard_mini/fixtures/contacts/*.json` — 17 in all. They are **synthetic**: invented data on
+reserved `.test` domains (and invented record shapes for the non-mail sources) in the shape the
+transport returns. They are not a recording of Randy's mailbox, address book or Beeper install,
+and every document produced from them carries a `FIXTURE:` label, `real_source_connected: false`
+and a disclaimer naming the source that was *not* contacted. The permission-denied and offline
+scenarios reproduce the exact `osascript` failure text for `-1743` and `-600`, so the same
+classification code that runs on the Mac is exercised by the tests here.
+
+**What `probe` answers in this mode.** 38 rows, and the split changed with the Contacts slice:
+
+| | rows | what they are |
+|---|---|---|
+| adapter-measured | **25** | 16 Mail (including the worker's own `manifest` self-measurement), 4 Beeper, 5 Contacts — `origin: fixture`, `supported: false` except the manifest row |
+| documentation-only | **13** | the 8 Hermes rows (no adapter exists yet) and the 5 Beeper rows this read-only slice deliberately does not build (send, send reconciliation, attachment materialisation, composer prefill, live event stream) — `origin: documentation`, `supported: false`, `state: unmeasured` |
+
+`supported: true` appears on exactly one row, the worker's own manifest self-measurement. The
+split is derived from which adapter declares which capability (`MEASURED_CAPABILITIES` in each
+adapter), not from a list kept in the tests.
 
 ## Commands
 
@@ -162,6 +176,8 @@ same classification code that runs on the Mac is exercised by the tests here.
 | `list --account X --mailbox INBOX --limit N [--cursor C] [--since T]` | one bounded page plus a resume cursor |
 | `fetch --account X --ref mail:<account>:<mailbox>:<id>` | headers, body, attachment metadata for one message |
 | `manifest [--probe-result FILE]` | capability manifest; without probe rows every capability is `unverified` |
+| `beeper …` | read-only Beeper Desktop local API — `token`, `info`, `introspect`, `health`, `search`, `messages`, `contacts`, `probe`; `accounts`/`chats` refuse `endpoint_not_in_pack`. See the Beeper section below |
+| `contacts …` | read-only Contacts — `authorization`, `request-access`, `health`, `enumerate`, `restricted-keys`, `change-history`, `probe`. See the Contacts section below |
 | `version` | worker and probe-contract versions |
 
 ### `run` and launchd
@@ -229,14 +245,17 @@ AppleScript in `switchboard_mini/mail_transport.py`, one script per operation, r
 python3 -m unittest discover -s tests -t .        # from the repository root
 ```
 
-The whole suite is **255 tests** in a fresh checkout; the number to trust is whatever that
+The whole suite is **420 tests** in a fresh checkout; the number to trust is whatever that
 command prints, so run it rather than believing this line. The Mini tests are
 `tests/test_mini_probe.py` (the row contract, the typed states, the labelling of every row by
 what it actually contacted, and the citations), `tests/test_mini_mail.py` (the Mail adapter
-against the four recorded scenarios) and `tests/test_mini_cli.py` (every command, in both
-modes, as a real process). `tests/test_probe_import.py` drives Grace's side: a probe run
-imports row by row, and one over-claiming row refuses the whole import. The Mini tests run
-entirely off recorded fixtures on any platform and assert the fixture labelling, the typed
+against the four recorded scenarios), `tests/test_mini_beeper.py` (the Beeper adapter and its
+handover over a real stdlib HTTP stub), `tests/test_mini_contacts.py` (the Contacts adapter, and
+the shipped JXA text run under Node against a stand-in ObjC bridge), `tests/test_mini_install.py`
+(the installer driven for real into temporary prefixes) and `tests/test_mini_cli.py` (every
+command, in both modes, as a real process). `tests/test_probe_import.py` drives Grace's side: a
+probe run imports row by row, and one over-claiming row refuses the whole import. The Mini tests
+run entirely off recorded fixtures on any platform and assert the fixture labelling, the typed
 failure states, cursor resumption, partial-history reporting, the retrieval-miss distinction,
 and that every mutating operation is `unsupported`.
 
@@ -275,3 +294,76 @@ subcommand is never reset by the subcommand parser, and a test covers both posit
 
 If any command cannot describe itself, it prints a typed `harness_failure` document on
 stdout with exit 3 -- never a stack trace.
+
+## Beeper (read-only, the Gate 2 slice for the Beeper rows)
+
+The second worker slice, after Mail. It reads the Beeper Desktop local API; it can never send,
+focus a composer, download an asset or subscribe to an event stream.
+
+* **Endpoints — only the four the probe pack documents.** `GET /v1/info` (O11),
+  `POST /oauth/introspect` (O11), `GET /v1/messages/search` (O06, `limit` ≤ 20) and
+  `GET /v1/accounts/{accountID}/contacts/list` (O12, `limit` ≤ 200). `beeper accounts` and
+  `beeper chats` **refuse** with `unsupported` / `endpoint_not_in_pack` and the smallest next
+  action (read the discovery URLs `GET /v1/info` exposes on the Mac) — no path is guessed.
+* **Token.** Read from the environment variable `BEEPER_ACCESS_TOKEN`; the base URL defaults to
+  the documented example host `http://localhost:23373` (O11) and is overridable with
+  `BEEPER_API_BASE_URL` or `--base-url`. The token value is never logged, echoed, persisted or
+  put in a URL or an error string — `beeper token` reports only whether one is present and which
+  environment variable it came from (`token_present`, `token_source`, `token_value_recorded:
+  false`) and contacts nothing.
+* **Commands:** `switchboard-mini beeper token | info | health | introspect | search
+  [--query Q] [--sweep] | messages [--query Q] [--sweep] | contacts --account-id ID | probe
+  [--out FILE]`, with `--limit`, `--cursor`, `--direction`, `--sender`, `--chat-id`,
+  `--ui-oldest-visible` and `--include-low-priority` on the read commands.
+* **A page that cannot be shown to be the end is not the end.** `limit` is capped at the
+  documented 20, and a page is `complete` only when the response itself said `hasMore: false`
+  for that query — with the note that this is the end of *that query's* result set.
+* **Coverage is partial by design.** O05 says history "might be limited", so an empty or short
+  page is `partial_history` with O05's own words as the gap reason, never "this chat has no
+  messages".
+* **Four recorded scenarios:** `healthy`, `token_rejected`, `beeper_down`, `history_limited`
+  in `switchboard_mini/fixtures/beeper/*.json`, each labelled synthetic.
+* **`--stand-in-server`.** A local responder used by the tests to exercise the real wire layer
+  against a real socket. Every document a stand-in run produces is marked
+  `responder: stand_in_http_server` (and the probe rows carry `stand_in: true`), so it can never
+  claim `real_source_connected`.
+
+## Contacts (read-only, macOS-only; the Gate 2 slice for rows S70-S80)
+
+The third worker slice, after Mail and Beeper. It reads; it never writes to Contacts and never
+emits a contact's name, address, number or note.
+
+* **Mechanism.** `contacts_transport.JXA_HELPER` is a JavaScript for Automation program run as
+  `osascript -l JavaScript -e <script>`. There is no compiled artifact: `build_script()` emits
+  the program that runs, and `tests/test_mini_contacts.py` executes that emitted text under Node
+  against a stand-in ObjC bridge (logic only -- it proves nothing about macOS).
+* **No prompt, by construction.** Every read calls `authorizationStatusForEntityType:` first and
+  refuses `authorization_not_granted` *before* constructing a fetch when the status is not
+  `authorized`; constructing a fetch on a non-granted store is what raises the consent dialog, so
+  a probe cannot raise one. `contacts request-access` is the only command that asks.
+* **Commands:** `switchboard-mini contacts authorization | request-access | health | enumerate
+  [--unify-off] [--limit N] [--compare-to FILE] | restricted-keys [--key-symbol SYM] |
+  change-history [--invalid-token] [--token-file FILE] | probe [--out FILE]`.
+* **Identifiers.** `CNContact.identifier` is device-local (Apple: it can change between devices
+  and after a restore), so it is a key for this Mac and never a cross-device identity. The worker
+  emits a SHA-256 fingerprint plus length/shape, never the identifier. `--compare-to FILE` (0600)
+  measures persistence across two runs: `first run recorded` / `stable` / `changed_or_incomplete`.
+* **Unified vs individual.** No page read in the pack names a call that enumerates the individual
+  records behind a unified contact, so `--unify-off` probes `setShouldUnifyResults:` with
+  `respondsToSelector:`, refuses `unification_toggle_absent` when the build does not answer it,
+  and otherwise reports only the fingerprint overlap it measured -- never a constituent claim.
+* **Restricted keys.** Which keys are notes-guarded is not documented anywhere the pack reads, so
+  `restricted-keys` refuses `key_symbol_not_supplied` unless given `--key-symbol SYM`; the value
+  comes from his installed SDK header. A symbol the build lacks is refused `key_symbol_absent`.
+* **Change history.** Records event classes, whether DropEverything came first, and writes the
+  token to `~/.switchboard/contacts-history-token` (0600). The token value is never printed,
+  echoed or logged -- only its length and fingerprint. `--invalid-token` uses the documented
+  trigger and any drop it produces is recorded as *deliberately invalid*, never a genuine reset.
+* **Nine recorded scenarios:** authorization_granted, authorization_denied,
+  authorization_not_determined, authorization_restricted, contacts_authorized_user_choice
+  (granted but empty), restricted_keys, change_history_reset, change_history_steady (no
+  unification toggle), bridge_unavailable. Each file records that it is synthetic and why.
+* **Row sources.** Every selector, class and key names its source in
+  `contacts_transport.CALL_SOURCES` / `KEY_SOURCES`; the two reached only through a runtime
+  `respondsToSelector:` probe are recorded as *not documented in the pack* and are never called
+  blind.

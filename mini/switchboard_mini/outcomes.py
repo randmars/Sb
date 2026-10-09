@@ -84,6 +84,11 @@ FIXTURE_DISCLAIMER_BY_SOURCE = {
         "--fixture-mode. No Beeper Desktop was contacted and no chat, message or contact "
         "was read; these are not observations of any real Beeper install."
     ),
+    "contacts": (
+        "FIXTURE — answered from a recorded result shipped in this repository in "
+        "--fixture-mode. No Contacts database was read and no contact, identifier, key or "
+        "change-history token was observed; these are not observations of any Mac."
+    ),
 }
 
 DOCUMENTATION_DISCLAIMER = (
@@ -239,9 +244,22 @@ PERMISSION_GRANTED = "granted"
 PERMISSION_STATE_DENIED = "denied"
 PERMISSION_NOT_DETERMINED = "not_determined"
 PERMISSION_NOT_APPLICABLE = "not_applicable"
+# NOTE (2026-10-09, Gate 2 Contacts slice): a fifth value, and the reason it is not "denied".
+# macOS Contacts reports its own authorization status as ``CNAuthorizationStatusRestricted``
+# -- Apple: "The application is not authorized to access contact data. The user cannot
+# change this application's status, possibly due to active restrictions such as parental
+# controls being in place." That is a different condition from ``denied`` (which the owner
+# can reverse in System Settings by granting access) and from ``not_determined`` (where
+# nothing has been asked yet): a restricted grant cannot be granted from that pane at all,
+# so telling Randy to "grant the permission in System Settings" would be wrong advice.
+# It was added here and in ``grace/contracts.py`` (one shared vocabulary, both sides) rather
+# than mapped onto an existing word, and ``tests/test_shared_vocabulary.py`` asserts the two
+# lists still agree.
+PERMISSION_RESTRICTED = "restricted"
 
 PERMISSION_STATES = (PERMISSION_GRANTED, PERMISSION_STATE_DENIED,
-                     PERMISSION_NOT_DETERMINED, PERMISSION_NOT_APPLICABLE)
+                     PERMISSION_NOT_DETERMINED, PERMISSION_NOT_APPLICABLE,
+                     PERMISSION_RESTRICTED)
 # NOTE (2026-10-08): this is the **single closed permission vocabulary** for the whole
 # product. Grace carries the same four values (``grace/contracts.py::PERMISSION_STATES``)
 # and ``tests/test_shared_vocabulary.py`` fails if the two ever drift. The probe used to

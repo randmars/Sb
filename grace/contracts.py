@@ -201,8 +201,13 @@ HONEST_EMPTY_ALLOWED = True  # a successful read may legitimately return nothing
 
 # ------------------------------------------------------- permission vocabulary ---
 #: The **single closed permission vocabulary** for the whole product. The Mini worker
-#: carries the identical four values (``switchboard_mini/outcomes.py::PERMISSION_STATES``)
-#: and ``tests/test_shared_vocabulary.py`` fails if the two drift. Before this was settled
+#: carries the identical five values (``switchboard_mini/outcomes.py::PERMISSION_STATES``)
+#: and ``tests/test_shared_vocabulary.py`` fails if the two drift. ``restricted`` was added
+#: 2026-10-09 for macOS Contacts (``CNAuthorizationStatusRestricted``: "The user cannot
+#: change this application's status, possibly due to active restrictions such as parental
+#: controls being in place") -- a blocked grant the owner cannot reverse in the same pane a
+#: ``denied`` grant is reversed in, so offering the grant advice for it would be wrong. It
+#: is one value in both modules and one condition in the web layer. Before this was settled
 #: the probe emitted ``not_applicable`` while this schema and the web layer expected
 #: ``not_required``/``unknown``, so a source that legitimately needs no macOS grant was
 #: read as a problem (and one filter matched a value no row ever emitted).
@@ -210,9 +215,11 @@ PERMISSION_GRANTED = "granted"
 PERMISSION_STATE_DENIED = "denied"
 PERMISSION_NOT_DETERMINED = "not_determined"
 PERMISSION_NOT_APPLICABLE = "not_applicable"
+PERMISSION_RESTRICTED = "restricted"
 
 PERMISSION_STATES = (PERMISSION_GRANTED, PERMISSION_STATE_DENIED,
-                     PERMISSION_NOT_DETERMINED, PERMISSION_NOT_APPLICABLE)
+                     PERMISSION_NOT_DETERMINED, PERMISSION_NOT_APPLICABLE,
+                     PERMISSION_RESTRICTED)
 #: Permission states under which a source is not itself a condition the owner must see.
 PERMISSION_OK_STATES = (PERMISSION_GRANTED, PERMISSION_NOT_APPLICABLE)
 

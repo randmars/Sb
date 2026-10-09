@@ -5,8 +5,10 @@ only: macOS ships a system Python without pip guarantees, so this package import
 nothing from outside the standard library and needs no virtualenv.
 
 Subcommands: ``probe``, ``run``, ``accounts``, ``mailboxes``, ``list``, ``fetch``,
-``health``, ``manifest``, ``version``, and the read-only Beeper family
-``beeper token|info|introspect|search|messages|contacts|accounts|chats|probe|health``.
+``health``, ``manifest``, ``version``, the read-only Beeper family
+``beeper token|info|introspect|search|messages|contacts|accounts|chats|probe|health``, and
+the read-only Contacts family
+``contacts authorization|request-access|enumerate|restricted-keys|change-history|probe|health``.
 
 Nothing in this worker sends, drafts or modifies Mail. ``--fixture-mode`` answers from
 recorded results in this repository and labels every document ``FIXTURE:``.
@@ -23,6 +25,9 @@ from . import outcomes as O
 from .beeper_adapter import build_adapter as build_beeper_adapter
 from .beeper_transport import (BASE_URL_ENV, DEFAULT_BASE_URL,
                                FIXTURE_SCENARIOS as BEEPER_FIXTURE_SCENARIOS)
+from .contacts_adapter import build_adapter as build_contacts_adapter
+from .contacts_transport import (FIXTURE_SCENARIOS as CONTACTS_FIXTURE_SCENARIOS,
+                                 compare_identifier_fingerprints, harden_token_file)
 from .mail_adapter import build_adapter
 from .mail_transport import FIXTURE_SCENARIOS
 from .probe import CAPABILITY_NAMES, run_probe
@@ -63,6 +68,14 @@ def _add_global_flags_to_subparsers(sub, *, beeper_scenarios=None) -> None:
             # the `beeper info --fixture-scenario ...` position, which PR #2's flag-order
             # tolerance promises to accept.
             is_beeper = "beeper" in (getattr(sub_parser, "prog", "") or "")
+            is_contacts = "contacts" in (getattr(sub_parser, "prog", "") or "")
+            if is_contacts and beeper_scenarios is None:
+                # The Contacts family nests too, and its scenarios are its own: offering Mail
+                # scenario names inside `contacts ...` would let a Mail recording be read as a
+                # Contacts one.
+                _add_global_flags_to_subparsers(nested,
+                                                beeper_scenarios=CONTACTS_FIXTURE_SCENARIOS)
+                continue
             _add_global_flags_to_subparsers(
                 nested, beeper_scenarios=(beeper_scenarios if beeper_scenarios is not None
                                           else (BEEPER_FIXTURE_SCENARIOS if is_beeper
@@ -270,6 +283,64 @@ def build_parser() -> argparse.ArgumentParser:
     b_probe = beeper_sub.add_parser("probe", help="emit the Beeper capability rows")
     b_probe.add_argument("--out", default=None, help="also write the rows to this file")
     b_probe.add_argument("--summary-to-stderr", action="store_true")
+    contacts = sub.add_parser(
+        "contacts", help="read-only Contacts access (the macOS Contacts framework)")
+    # ``default=argparse.SUPPRESS``: if this carried a default it would shadow the same flag
+    # written *after* the action (`contacts probe --fixture-scenario ...`), which argparse
+    # attaches to the nested parser under ``dest='fixture_scenario'`` -- and every Contacts
+    # command would silently answer from the default scenario instead.
+    contacts.add_argument("--fixture-scenario", dest="contacts_fixture_scenario",
+                          default=argparse.SUPPRESS, choices=list(CONTACTS_FIXTURE_SCENARIOS),
+                          help="recorded scenario to answer from in --fixture-mode")
+    contacts.add_argument("--token-file", dest="contacts_token_file", default=None,
+                          help="where the change-history token lives; the documented "
+                               "persistence point for a change-history token (O15). Default "
+                               "~/.switchboard/contacts-history-token, mode 0600")
+    contacts.add_argument("--key-symbol", dest="contacts_key_symbol", default=None,
+                          help="a notes-guarded key symbol read from the installed SDK header "
+                               "(no page in the pack names one, so the worker will not)")
+    contacts.add_argument("--limit", dest="contacts_limit", type=int, default=25,
+                          help="most contacts one bounded fetch returns (default 25)")
+    contacts.add_argument("--pretty", action="store_true", default=argparse.SUPPRESS,
+                          help="indent JSON output")
+    contacts_sub = contacts.add_subparsers(dest="contacts_command")
+    contacts_sub.add_parser(
+        "authorization", help="the store's authorization status; never raises the consent "
+                              "dialog a fetch can raise")
+    contacts_sub.add_parser(
+        "request-access", help="ask macOS for Contacts access (this command is the prompt)")
+    contacts_sub.add_parser(
+        "health", help="one health document on the shared healthy-source vocabulary")
+    c_enumerate = contacts_sub.add_parser(
+        "enumerate", help="bounded contact enumeration with device-local identifiers")
+    c_enumerate.add_argument("--unify-off", action="store_true",
+                             help="also turn unification off, if the installed framework has "
+                                  "the toggle (it is checked, never assumed)")
+    c_enumerate.add_argument("--limit", dest="contacts_limit", type=int, default=argparse.SUPPRESS,
+                             help="most contacts one bounded fetch returns (default 25)")
+    c_enumerate.add_argument("--compare-to", dest="contacts_compare", default=None,
+                             help="compare this run's identifier fingerprints with a previous "
+                                  "run's, to measure whether identifiers persist (mode 0600)")
+    c_restricted = contacts_sub.add_parser(
+        "restricted-keys", help="attempt the notes-guarded key symbol the owner read from the "
+                                "SDK header, and record what happened")
+    c_restricted.add_argument("--key-symbol", dest="contacts_key_symbol", default=argparse.SUPPRESS,
+                              help="a notes-guarded key symbol read from the installed SDK header")
+    c_history = contacts_sub.add_parser(
+        "change-history", help="change-history fetch: event classes, the token, and the "
+                               "documented invalid-token trigger")
+    c_history.add_argument("--invalid-token", action="store_true",
+                           help="use the documented reset trigger (a deliberately invalid "
+                                "token) -- never reported as a genuine reset")
+    c_history.add_argument("--token-file", dest="contacts_token_file", default=argparse.SUPPRESS,
+                           help="where the change-history token lives (mode 0600)")
+    c_history.add_argument("--include-group-changes", action="store_true",
+                           help="include group changes (O15 documents the default as NO)")
+    c_probe = contacts_sub.add_parser("probe", help="emit the five Contacts capability rows")
+    c_probe.add_argument("--limit", dest="contacts_limit", type=int, default=argparse.SUPPRESS,
+                         help="most contacts one bounded fetch returns (default 25)")
+    c_probe.add_argument("--out", default=None, help="also write the rows to this file")
+    c_probe.add_argument("--summary-to-stderr", action="store_true")
     _add_global_flags_to_subparsers(sub)
     return parser
 
@@ -293,14 +364,49 @@ def _beeper_adapter(args):
         stand_in=bool(getattr(args, "stand_in_server", False)))
 
 
+def _contacts_scenario(args) -> str:
+    """The Contacts fixture scenario, tolerating the flag argparse may have nested.
+
+    ``--fixture-scenario`` is added to subcommands that lack it (with ``dest``
+    ``fixture_scenario``); a Contacts subcommand can carry either name. Only a value that is
+    actually a Contacts scenario is honoured, so a Mail scenario name can never be
+    reinterpreted as a Contacts one.
+    """
+    for name in ("contacts_fixture_scenario", "fixture_scenario"):
+        value = getattr(args, name, None)
+        if value in CONTACTS_FIXTURE_SCENARIOS:
+            return value
+    return "authorization_granted"
+
+
+def _contacts_options(args) -> dict:
+    return {"token_file": getattr(args, "contacts_token_file", None),
+            "key_symbol": getattr(args, "contacts_key_symbol", None),
+            "identifier_file": getattr(args, "contacts_compare", None),
+            "limit": getattr(args, "contacts_limit", 25)}
+
+
+def _contacts_adapter(args):
+    """The Contacts read adapter, in fixture mode or for real. One place decides."""
+    options = _contacts_options(args)
+    return build_contacts_adapter(
+        fixture_mode=bool(getattr(args, "fixture_mode", False)),
+        fixture_scenario=_contacts_scenario(args),
+        timeout_s=int(getattr(args, "timeout", 120) or 120),
+        limit=int(options["limit"] or 25),
+        key_symbol=options["key_symbol"],
+        token_file=options["token_file"])
+
+
 def _probe_adapters(args):
     """Every source adapter this worker ships, for one probe run.
 
     One run, one row per capability key: the Mail adapter measures the Mail rows, the
-    Beeper adapter measures the four Beeper rows it can, and a capability neither can
-    measure is reported as the documentation read the pack records.
+    Beeper adapter measures the five Beeper rows it can, the Contacts adapter measures the
+    five Contacts rows it can, and a capability none of them can measure is reported as the
+    documentation read the pack records.
     """
-    adapters = [_adapter(args), _beeper_adapter(args)]
+    adapters = [_adapter(args), _beeper_adapter(args), _contacts_adapter(args)]
     if getattr(args, "mail_only", False):
         return adapters[:1]
     return adapters
@@ -324,7 +430,8 @@ def cmd_probe(args) -> int:
                     mailbox=args.mailbox, max_scan=args.max_scan,
                     beeper_account_id=getattr(args, "beeper_account_id", None),
                     beeper_ui_oldest_visible=getattr(args, "beeper_ui_oldest_visible",
-                                                     None))
+                                                     None),
+                    contacts=_contacts_options(args))
     if args.out:
         with open(args.out, "w", encoding="utf-8") as handle:
             for row in run.rows:
@@ -399,6 +506,88 @@ def cmd_manifest(args) -> int:
     rows = _read_probe_rows(args.probe_result) if args.probe_result else None
     _print(adapter.manifest(rows), args.pretty)
     return EXIT_OK
+
+
+def cmd_contacts(args) -> int:
+    """The Contacts read family. Read-only: nothing here writes to Contacts.
+
+    Every method behind these commands refuses before constructing a fetch when the
+    authorization status is not ``authorized``, so a read can never raise the consent dialog;
+    ``request-access`` is the one command whose whole purpose is that dialog.
+    """
+    adapter = _contacts_adapter(args)
+    action = getattr(args, "contacts_command", None)
+    if action is None:
+        sys.stderr.write("usage: switchboard-mini contacts "
+                         "authorization|request-access|enumerate|restricted-keys|"
+                         "change-history|probe|health\n")
+        return EXIT_USAGE
+    if action == "authorization":
+        _print(adapter.authorization().to_dict(), args.pretty)
+        return EXIT_OK
+    if action == "request-access":
+        _print(adapter.request_access().to_dict(), args.pretty)
+        return EXIT_OK
+    if action == "health":
+        _print(adapter.health().to_dict(), args.pretty)
+        return EXIT_OK
+    if action == "enumerate":
+        outcome = adapter.enumerate_contacts(unify_off=bool(getattr(args, "unify_off", False)))
+        data = dict(outcome.data or {})
+        outcome.data = data
+        if outcome.usable:
+            current = [item.get("identifier_fingerprint") for item in data.get("items") or []
+                       if item.get("identifier_fingerprint")]
+            path = getattr(args, "contacts_compare", None)
+            data["identifier_comparison"] = compare_identifier_fingerprints(
+                path, current, write=bool(path and adapter.adapter_is_real))
+            if not adapter.adapter_is_real:
+                data["identifier_comparison"].setdefault(
+                    "persistence_comparison_file", path)
+        _print(outcome.to_dict(), args.pretty)
+        return EXIT_OK
+    if action == "restricted-keys":
+        _print(adapter.restricted_keys(getattr(args, "contacts_key_symbol", None)).to_dict(),
+               args.pretty)
+        return EXIT_OK
+    if action == "change-history":
+        outcome = adapter.change_history(
+            invalid_token=bool(getattr(args, "invalid_token", False)))
+        data = dict(outcome.data or {})
+        if outcome.usable:
+            # A real run wrote the token; it is a handle on the contact database, so it is
+            # owner-only. The value is never printed, only its length and fingerprint.
+            mode = harden_token_file(getattr(args, "contacts_token_file", None)
+                                     or data.get("token_file"))
+            if mode:
+                data["token_file_mode"] = mode
+        outcome.data = data
+        _print(outcome.to_dict(), args.pretty)
+        return EXIT_OK
+    if action == "probe":
+        run = run_probe([adapter], only_source="contacts",
+                        contacts={"token_file": getattr(args, "contacts_token_file", None),
+                                  "key_symbol": getattr(args, "contacts_key_symbol", None),
+                                  "identifier_file": getattr(args, "contacts_compare", None),
+                                  "limit": getattr(args, "contacts_limit", 25)})
+        if args.out:
+            with open(args.out, "w", encoding="utf-8") as handle:
+                for row in run.rows:
+                    handle.write(O.emit(row) + "\n")
+        for row in run.rows:
+            _line(row)
+        if getattr(args, "summary_to_stderr", False):
+            sys.stderr.write(O.emit({
+                "event": "probe_summary", "origin": adapter.origin,
+                "adapter_is_real": bool(adapter.adapter_is_real),
+                "adapter": adapter.name,
+                "label": adapter._label(), **run.summary()}) + "\n")
+        if not run.ok:
+            sys.stderr.write(O.emit({"event": "probe_harness_errors",
+                                     "errors": run.harness_errors}) + "\n")
+            return EXIT_HARNESS_FAILURE
+        return EXIT_OK
+    return EXIT_USAGE
 
 
 def cmd_beeper(args) -> int:
@@ -490,11 +679,13 @@ def main(argv: Optional[list] = None) -> int:
                 "python": sys.version.split()[0],
                 "standard_library_only": True,
                 "fixture_scenarios": list(FIXTURE_SCENARIOS),
-                "beeper_fixture_scenarios": list(BEEPER_FIXTURE_SCENARIOS)}, args.pretty)
+                "beeper_fixture_scenarios": list(BEEPER_FIXTURE_SCENARIOS),
+                "contacts_fixture_scenarios": list(CONTACTS_FIXTURE_SCENARIOS)}, args.pretty)
         return EXIT_OK
     handlers = {"probe": cmd_probe, "run": cmd_run, "health": cmd_health,
                 "accounts": cmd_accounts, "mailboxes": cmd_mailboxes, "list": cmd_list,
-                "fetch": cmd_fetch, "manifest": cmd_manifest, "beeper": cmd_beeper}
+                "fetch": cmd_fetch, "manifest": cmd_manifest, "beeper": cmd_beeper,
+                "contacts": cmd_contacts}
     try:
         return handlers[args.command](args)
     except KeyboardInterrupt:

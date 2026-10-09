@@ -1,0 +1,69 @@
+{
+  "synthetic": true,
+  "recorded_on": "the Linux team computer, 2026-10-09",
+  "recorded_by": "engineer, Gate 2 Contacts slice",
+  "why_synthetic": "no macOS host is reachable from the team computer, so this file is a hand-built recording of the *shape* of a helper response -- the field names and refusal reasons the shipped JXA helper emits, and the documented call/return shapes in probe-pack records O13-O16. It is NOT a measurement of any Mac and every row it produces is labelled FIXTURE:. The Mac values land in the ledger only when Randy runs the probe on his Mac.",
+  "shipped_by": "mini/switchboard_mini/fixtures/contacts/",
+  "scenario": "bridge_unavailable",
+  "label": "FIXTURE:contacts(recorded Contacts fixture 'bridge_unavailable')",
+  "note": "The typed refusal the brief called for: reading Contacts needs the Objective-C bridge of osascript -l JavaScript, and this host did not provide it.",
+  "token_base64": "c3dpdGNoYm9hcmQtc3ludGhldGljLWhpc3RvcnktdG9rZW4tYnJpZGdl",
+  "responses": {
+    "authorization_status": {
+      "outcome": "refused",
+      "source_contacted": false,
+      "refusal": {
+        "reason": "bridge_unavailable",
+        "detail": "ObjC.import('Contacts') threw on this host: Error: the JavaScript bridge cannot reach the Contacts framework here"
+      }
+    },
+    "request_access": {
+      "outcome": "refused",
+      "source_contacted": false,
+      "refusal": {
+        "reason": "bridge_unavailable",
+        "detail": "ObjC.import('Contacts') threw on this host: Error: the JavaScript bridge cannot reach the Contacts framework here"
+      }
+    },
+    "enumerate": {
+      "outcome": "refused",
+      "source_contacted": false,
+      "refusal": {
+        "reason": "bridge_unavailable",
+        "detail": "ObjC.import('Contacts') threw on this host: Error: the JavaScript bridge cannot reach the Contacts framework here"
+      }
+    },
+    "enumerate_unify_off": {
+      "outcome": "refused",
+      "source_contacted": false,
+      "refusal": {
+        "reason": "bridge_unavailable",
+        "detail": "ObjC.import('Contacts') threw on this host: Error: the JavaScript bridge cannot reach the Contacts framework here"
+      }
+    },
+    "restricted_keys": {
+      "outcome": "refused",
+      "source_contacted": false,
+      "refusal": {
+        "reason": "bridge_unavailable",
+        "detail": "ObjC.import('Contacts') threw on this host: Error: the JavaScript bridge cannot reach the Contacts framework here"
+      }
+    },
+    "change_history": {
+      "outcome": "refused",
+      "source_contacted": false,
+      "refusal": {
+        "reason": "bridge_unavailable",
+        "detail": "ObjC.import('Contacts') threw on this host: Error: the JavaScript bridge cannot reach the Contacts framework here"
+      }
+    },
+    "change_history_invalid": {
+      "outcome": "refused",
+      "source_contacted": false,
+      "refusal": {
+        "reason": "bridge_unavailable",
+        "detail": "ObjC.import('Contacts') threw on this host: Error: the JavaScript bridge cannot reach the Contacts framework here"
+      }
+    }
+  }
+}

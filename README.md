@@ -59,12 +59,12 @@ source; where it has not, the product shows an explicit typed state.*
 |---|---|---|
 | Grace service, ledger, approvals, effects, rules, ingest | **Executed for real here** — real SQLite, real transactions, real process restarts | — |
 | CLI and its JSON output | **Executed for real here** | — |
-| Test suite (`tests/`, 353 tests) | **Executed for real here** (all pass) | — |
-| Mail / Beeper / Contacts / Hermes adapters | **Mock only** (`MockMailAdapter`, `MockBeeperAdapter`, `MockContactsAdapter`, `MockHermesAdapter`), labelled `MOCK:` | The real adapters, the capability manifests they return, permissions, versions, latency (PRD §11, §14 Gate 2) |
+| Test suite (`tests/`, 420 tests) | **Executed for real here** (all pass) | — |
+| Grace-side source adapters | **Mock only** (`MockMailAdapter`, `MockBeeperAdapter`, `MockContactsAdapter`, `MockHermesAdapter` in `grace/adapters.py`), labelled `MOCK:`. The Mini worker **does** now ship real read-only Mail, Beeper and Contacts adapters — see the Mini row below | Permissions, versions, latency and the capability manifests the real adapters return (PRD §11, §14 Gate 2) |
 | Agent runs (the "MOCK worker pass") | **Simulated**; produces a labelled draft, never an external message | Real Hermes sessions/runs/progress/stop (Gate 3) |
 | Sends, dispatch results, receipts | **Simulated end to end.** `verified_against_real_source = 0` on every receipt | Real outbound operation and reconciled receipt (Gate 3) |
 | Review web client, phone surface | **Built and exercised for real here** — `grace serve` over HTTP on this computer, driven in a real browser at iPhone viewport (Needs me → assign → mock worker run → review → approve-and-bind → dispatch → receipt). Served content is labelled mock (`MOCK:`, `mocked: true`) | Randy validating triage and approval on his own phone, and how his phone reaches the client (Gate 3/4) |
-| Mini worker (`mini/`, `switchboard-mini`) | **Executed for real here** against recorded fixtures only; the four `--fixture-mode` probe scenarios and the cursor/retrieval behaviour are tested. Every row says `origin: fixture` | The real Mail.app probe rows, the Automation permission, the installed build's version and its actual AppleScript behaviour (Gate 2). See `mini/README.md` |
+| Mini worker (`mini/`, `switchboard-mini`) | **Executed for real here** against recorded fixtures only: 17 recorded scenarios (4 Mail, 4 Beeper, 9 Contacts), the cursor/retrieval behaviour and the two host-refusal states (`unsupported`, `host_not_macos`). Its `probe` answers 38 rows — **25 adapter-measured** (`origin: fixture`, `supported: false`) and **13 documentation-only** (`origin: documentation`, `supported: false`, `state: unmeasured`) | The real Mail.app / Beeper Desktop / Contacts reads, permissions, the installed builds' versions and their actual AppleScript and JXA behaviour (Gate 2). See `mini/README.md` |
 
 Consequences you can see in the data: every receipt records
 `verified_against_real_source = 0`; every adapter's `describe()` returns
@@ -303,7 +303,7 @@ mock adapters.
 ## Tests
 
 ```bash
-python3 -m unittest discover -s tests -t .           # 353 tests, no third-party dependency
+python3 -m unittest discover -s tests -t .           # 420 tests, no third-party dependency
 ```
 
 The five required scenarios:
@@ -339,8 +339,11 @@ attachments, and that no fixture contains a secret or a real endpoint.
 
 ## Deliberately not in this build
 
-* No real Mail, Beeper, Contacts or Hermes adapter; no probe results (Gate 2), no real send
-  (Gate 3), no phone client (Gate 3/4).
+* No **live** source read on any host reachable from here: the Mini worker's Mail, Beeper and
+  Contacts adapters are real code, but they have only ever been driven against recorded fixtures
+  and the two host-refusal paths. No probe row from Randy's Mac has been imported, no Hermes
+  adapter exists, and Grace still reaches the sources only through its labelled `MOCK:` adapters
+  (Gate 2). No real send (Gate 3), no phone client (Gate 3/4).
 * No unattended send, no standing send authority, no mass messaging.
 * No full-history mirroring of source mail; only bounded enumeration plus retrieval by reference.
 * No every-account/every-channel coverage, no dashboards beyond the four surfaces, no multi-user
