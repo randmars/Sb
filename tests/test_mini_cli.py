@@ -399,10 +399,12 @@ class TestFlagPositions(unittest.TestCase):
         # The Beeper adapter is in this run, so its four rows are measured (as fixtures,
         # never supported); only the sources with no adapter in the worker -- Contacts and
         # Hermes -- are still documentation reads.
+        measured_caps = {r["capability"] for r in rows_after if r.get("supersedes")}
+        self.assertTrue(measured_caps, "the Beeper adapter measures its own rows")
         self.assertTrue(all(r["origin"] == O.FIXTURE for r in rows_after
-                            if r["source"] == "beeper"))
+                            if r["capability"] in measured_caps))
         self.assertTrue(all(r["origin"] == O.DOCUMENTATION for r in rows_after
-                            if r["source"] not in ("mail", "beeper")))
+                            if r["capability"] not in measured_caps))
         self.assertEqual([r["state"] for r in rows_before],
                          [r["state"] for r in rows_after])
 
