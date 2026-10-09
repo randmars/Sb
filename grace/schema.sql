@@ -58,6 +58,10 @@ CREATE TABLE IF NOT EXISTS capability (
   evidence              TEXT,                   -- JSON: what was actually observed
   values_from_source    INTEGER,                -- 1 only when the row answered with source data
   real_source_connected INTEGER,                -- 1 only when a real source was contacted
+  measurement_target    TEXT,                   -- what this row measured: source|worker
+                                                -- ('worker' only for the Mini worker's own
+                                                -- manifest row -- a self-measurement that
+                                                -- contacts nothing; see contracts.py)
   sourced_refs          TEXT,                   -- JSON: probe-pack refs (O01-O22) a documentation row quotes
   PRIMARY KEY (account_id, name)
 );

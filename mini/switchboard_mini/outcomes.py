@@ -149,6 +149,47 @@ def probe_row_supported_claim_allowed(row: dict) -> bool:
     return True
 
 
+#: What a probe row is a measurement *of* (defect fix, 2026-10-09). Every row is about a
+#: source (Mail, Beeper, Contacts, Hermes) except the worker's own ``manifest`` row, which
+#: measures **the worker**: it says whether the manifest the worker emits declares every
+#: capability and marks each unprobed one ``supported: false``. That row contacts no
+#: source, so it may neither claim a source value nor be read as one -- but it is a real
+#: measurement of something, and this field is how it says which.
+MEASUREMENT_SOURCE = "source"
+MEASUREMENT_WORKER = "worker"
+MEASUREMENT_TARGETS = (MEASUREMENT_SOURCE, MEASUREMENT_WORKER)
+
+#: The frozen set of capabilities that are a measurement of the worker itself. Frozen on
+#: purpose: it is the whole width of the exception below, so a row for any other
+#: capability cannot borrow it. Grace holds the same set in ``grace/contracts.py`` and
+#: ``tests/test_probe_manifest_self_measurement.py`` asserts the two agree.
+SELF_MEASURED_CAPABILITIES = frozenset({"manifest"})
+
+
+def probe_row_supported_without_a_source_allowed(row: dict) -> bool:
+    """May a row that contacted no source still carry ``supported: true``?
+
+    Only for a row that says so in its own contract field -- ``measurement_target:
+    'worker'`` -- and only for one of the frozen :data:`SELF_MEASURED_CAPABILITIES`.
+    Everything else is the ordinary rule: support means a source answered this row
+    (``real_source_connected``), and a row that never touched a source may not claim it.
+
+    This is deliberately *not* a bypass: the capability name alone is not enough (a row
+    with the marker on a source capability is still refused), a documentation row can
+    never use it (a page is not a measurement of anything, including the worker), and a
+    self-measurement may carry no source values.
+
+    Grace holds the identical rule
+    (``grace/contracts.py::probe_row_supported_without_a_source_allowed``); ``tests/
+    test_probe_manifest_self_measurement.py`` asserts the two agree case by case.
+    """
+    if row.get("origin") == DOCUMENTATION:
+        return False
+    if row.get("measurement_target") != MEASUREMENT_WORKER:
+        return False
+    return (row.get("capability") or row.get("name")) in SELF_MEASURED_CAPABILITIES
+
+
 # ----------------------------------------------------------------- typed codes --
 # Mirrors grace/contracts.py ADAPTER_OUTCOMES exactly; tests assert the equality.
 

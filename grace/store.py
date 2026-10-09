@@ -45,6 +45,8 @@ ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "evidence": "TEXT",
         "values_from_source": "INTEGER",
         "real_source_connected": "INTEGER",
+        # what a probe row measured: 'source' | 'worker' (defect fix, 2026-10-09)
+        "measurement_target": "TEXT",
         "sourced_refs": "TEXT",
     },
     "workspace_conversation": {
