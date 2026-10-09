@@ -251,6 +251,47 @@ def probe_row_supported_claim_allowed(row: Mapping[str, Any]) -> bool:
     return True
 
 
+#: What a probe row is a measurement *of* (defect fix, 2026-10-09). Every row is about a
+#: source (Mail, Beeper, Contacts, Hermes) except the Mini worker's own ``manifest`` row,
+#: which measures **the worker**. That row contacts no source, so it may not claim a
+#: source value -- but it is a real measurement of something, and this field says which.
+MEASUREMENT_SOURCE = "source"
+MEASUREMENT_WORKER = "worker"
+MEASUREMENT_TARGETS = (MEASUREMENT_SOURCE, MEASUREMENT_WORKER)
+
+#: The frozen set of capabilities that are a measurement of the worker itself -- the whole
+#: width of the one exception in :func:`probe_row_supported_without_a_source_allowed`. The
+#: Mini worker holds the same set (``outcomes.SELF_MEASURED_CAPABILITIES``) and
+#: ``tests/test_probe_manifest_self_measurement.py`` asserts the two agree.
+SELF_MEASURED_CAPABILITIES = frozenset({"manifest"})
+
+
+def probe_row_supported_without_a_source_allowed(row: Mapping[str, Any]) -> bool:
+    """May a row that contacted no source still carry ``supported: true``?
+
+    Only for a row that says so in its own contract field -- ``measurement_target:
+    'worker'`` -- and only for one of the frozen :data:`SELF_MEASURED_CAPABILITIES`.
+    Everything else is the ordinary rule of :func:`probe_row_problems`: support means a
+    source answered this row, and a row that never touched a source may not claim it.
+
+    Deliberately **not** a bypass. The marker alone is not enough (a row carrying it for a
+    source capability is refused), a documentation row can never use it, and a
+    self-measurement may carry no source values (:func:`probe_row_problems` enforces both).
+    The defect it exists for: the worker's ``manifest`` row is ``origin: real,
+    supported: true, real_source_connected: false`` because it describes the worker, not a
+    source -- and one such row refused an entire real Gate 2 handoff.
+
+    The Mini worker holds the identical rule
+    (``outcomes.probe_row_supported_without_a_source_allowed``); ``tests/
+    test_probe_manifest_self_measurement.py`` asserts the two agree case by case.
+    """
+    if row.get("origin") == DOCUMENTATION:
+        return False
+    if row.get("measurement_target") != MEASUREMENT_WORKER:
+        return False
+    return (row.get("capability") or row.get("name")) in SELF_MEASURED_CAPABILITIES
+
+
 @dataclass
 class Outcome:
     """Typed adapter result. Never an exception, never a silent empty success."""

@@ -28,7 +28,8 @@ from typing import Any, Optional
 from . import contracts as C
 from .effects import InjectedFault
 from .fixtures import scenario_names
-from .ingest import import_probe_rows
+from .ingest import (PROBE_DOCUMENT_WRAP, import_probe_rows,  # noqa: F401
+                     probe_document_refusal, read_probe_document)
 from .service import Grace
 from .store import DEFAULT_DB
 
@@ -197,7 +198,11 @@ def _build_parser() -> argparse.ArgumentParser:
                     help="a JSON document with a 'rows' list. The Mini worker writes "
                          "JSONL, one row per line: `switchboard-mini probe --account "
                          "<label> --out rows.jsonl` — there is no `--json` flag. Wrap it "
-                         "before importing: `jq -s '{rows: .}' rows.jsonl > rows.json`")
+                         f"before importing: `{PROBE_DOCUMENT_WRAP} rows.jsonl > rows.json`. "
+                         "Anything else (an unwrapped JSONL run, an empty file, a bare "
+                         "array, a non-JSON file) is refused with a typed reason, the "
+                         "smallest next action that works for that shape, and nothing "
+                         "stored")
     pi.add_argument("--account", required=True, help="the source_account_id these rows describe")
     pi.add_argument("--actor", default="probe-import")
 
@@ -318,8 +323,15 @@ def _dispatch(svc: Grace, args: argparse.Namespace, cmd: str, pretty: bool) -> i
     if cmd == "source-health":
         return _print(emit(cmd, data={"sources": svc.ingest.source_health()}), pretty)
     if cmd == "probe-import":
-        document = json.loads(Path(args.file).read_text())
-        rows = document["rows"] if isinstance(document, dict) else document
+        # The document is read (and a malformed one refused, typed) before anything is
+        # built, opened or stored: a bad file is a refusal, never a traceback.
+        loaded = read_probe_document(args.file)
+        if not loaded["ok"]:
+            refusal = probe_document_refusal(loaded)
+            return _print(emit(cmd, ok=False, data=refusal, message=(
+                f"refused: {loaded['reason']}, nothing stored — {loaded['problem']} "
+                f"Smallest next action: {loaded['next_action']}")), pretty)
+        rows = loaded["rows"]
         # Above the store: a malformed or over-claiming document is a typed refusal, never a
         # partial import and never an exception.
         result = import_probe_rows(svc.store, args.account, rows, actor=args.actor)

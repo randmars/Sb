@@ -45,6 +45,8 @@ ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "evidence": "TEXT",
         "values_from_source": "INTEGER",
         "real_source_connected": "INTEGER",
+        # what a probe row measured: 'source' | 'worker' (defect fix, 2026-10-09)
+        "measurement_target": "TEXT",
         "sourced_refs": "TEXT",
     },
     "workspace_conversation": {
@@ -103,6 +105,14 @@ class Store:
     def migrate(self) -> None:
         # executescript() manages its own transaction and implicitly commits, so this is
         # deliberately not wrapped in tx().
+        # The added columns go in FIRST. ``schema.sql`` creates indexes over columns that an
+        # older ledger does not have yet (``ix_job_filter`` covers ``job.queue_state``), and
+        # ``CREATE INDEX`` fails on a missing column -- so adding the columns after the script
+        # could not open the very ledger this upgrade exists for. Idempotent both ways round:
+        # the first call covers an existing table, the second covers anything the script just
+        # created. Defect fixed 2026-10-09, proved on a pre-column ledger in
+        # tests/test_ledger_upgrade.py.
+        self._add_missing_columns()
         self.conn.executescript(SCHEMA_PATH.read_text())
         self._add_missing_columns()
         # Per-job triage state is derived state: recomputing it here is idempotent and

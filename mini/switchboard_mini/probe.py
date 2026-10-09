@@ -62,7 +62,8 @@ ROW_FIELDS = ("capability", "supported", "permission_state", "observed_version",
 ROW_LABELLING_FIELDS = ("state", "origin", "label", "disclaimer", "probed_at",
                         "title", "values_from_source", "adapter_is_real",
                         "real_source_connected", "probe_contract_version",
-                        "source", "citations", "observed_version_reason", "supersedes")
+                        "source", "citations", "observed_version_reason", "supersedes",
+                        "measurement_target")
 
 
 @dataclass(frozen=True)
@@ -404,16 +405,35 @@ def _row(context: ProbeContext, capability: Capability, *, supported: bool, stat
          values_from_source: Optional[bool] = None,
          origin: Optional[str] = None, adapter_is_real: Optional[bool] = None,
          citations: Optional[tuple] = None, label: Optional[str] = None,
-         supersedes: Optional[dict] = None) -> dict:
+         supersedes: Optional[dict] = None,
+         measurement_target: Optional[str] = None) -> dict:
     """Build one row, enforcing the rules that keep a row from over-claiming.
 
     ``observed_version`` is **never** defaulted from another row's read: a caller that
     observed a version passes it (with what it came from), and every other row reports
     the literal ``not_observed`` and the reason. ``supported`` is refused outright for a
     documentation-origin row, because a page is not a measurement.
+
+    ``measurement_target`` says what this row is a measurement *of*: ``"source"`` (the
+    default, and every row but one) or ``"worker"`` for the worker's own manifest row,
+    which never touches a source. The worker-side half of that rule is here: the marker is
+    refused for any capability that is not a frozen worker self-measurement, and a
+    self-measurement may carry no source values.
     """
     row_origin = origin or context.origin
     row_cites = tuple(citations if citations is not None else capability.citations)
+    row_target = measurement_target or O.MEASUREMENT_SOURCE
+    if row_target not in O.MEASUREMENT_TARGETS:
+        raise ValueError(
+            f"probe row {capability.name!r}: measurement_target {row_target!r} is not one "
+            f"of {list(O.MEASUREMENT_TARGETS)}")
+    if row_target == O.MEASUREMENT_WORKER and (
+            capability.name not in O.SELF_MEASURED_CAPABILITIES):
+        raise ValueError(
+            f"probe row {capability.name!r}: measurement_target 'worker' is only for a "
+            f"worker self-measurement ({sorted(O.SELF_MEASURED_CAPABILITIES)}); a row about "
+            "a source may not claim support without one")
+
     if observed_version is None:
         observed_version = O.VERSION_NOT_OBSERVED
         observed_version_reason = observed_version_reason or (
@@ -467,7 +487,15 @@ def _row(context: ProbeContext, capability: Capability, *, supported: bool, stat
             (context.adapter_is_real if adapter_is_real is None else adapter_is_real)
             and (state in (O.SUCCESS, O.PARTIAL)
                  if values_from_source is None else bool(values_from_source))),
+        # What this row measured: a source, or -- for the worker's own manifest row, and
+        # only there -- the worker itself.
+        "measurement_target": row_target,
     }
+    if row_target == O.MEASUREMENT_WORKER and (row["values_from_source"]
+                                               or row["real_source_connected"]):
+        raise ValueError(
+            f"probe row {capability.name!r}: a worker self-measurement reads no source, so "
+            "it may not carry source values or claim a source was connected")
     row["supersedes"] = dict(supersedes) if supersedes else None
     if row["supersedes"] is not None and row["citations"]:
         raise ValueError(
@@ -522,12 +550,28 @@ def _blocked_row(context: ProbeContext, capability: Capability, outcome: O.Outco
 # ------------------------------------------------------------- per capability --
 
 def _probe_manifest(context: ProbeContext, capability: Capability) -> dict:
+    """The worker's own manifest, measured -- a self-measurement, not a source read.
+
+    This row never touches Mail, Beeper, Contacts or Hermes: what it asserts is that the
+    worker emits a manifest declaring every capability and marking each unprobed one
+    ``supported=false``. ``supported`` therefore reports whether *that assertion* held --
+    an adapter whose manifest claims an unprobed capability makes the row ``unsupported``
+    with the claimed names in ``limitation``, rather than being hardcoded true. Because it
+    is a measurement of the worker, it carries ``measurement_target: "worker"`` and says so
+    to Grace (defect fix, 2026-10-09: without that, one such row -- ``origin: real,
+    supported: true, real_source_connected: false`` -- refused a whole real 38-row handoff).
+    """
     manifest = context.adapter.manifest()
     caps = manifest["capabilities"]
     claimed = sorted(name for name, entry in caps.items() if entry["supported"])
-    return _row(context, capability, supported=True, state=O.SUCCESS,
+    held = not claimed
+    return _row(context, capability, supported=held,
+                state=O.SUCCESS if held else O.UNSUPPORTED,
                 permission_state=O.PERMISSION_NOT_APPLICABLE,
-                limitation=None,
+                limitation=(None if held else
+                            "the manifest marks " + ", ".join(claimed) + " supported "
+                            "before the probe measured it, so this row's own assertion did "
+                            "not hold"),
                 evidence={
                     "manifest_version": manifest["manifest_version"],
                     "adapter": manifest["adapter"],
@@ -535,6 +579,11 @@ def _probe_manifest(context: ProbeContext, capability: Capability) -> dict:
                     "capabilities_declared": len(caps),
                     "capabilities_claimed_supported_without_probe": len(claimed),
                     "claimed_without_probe": claimed,
+                    # The assertion above, answered as a boolean so a reader does not have
+                    # to re-derive it: ``supported`` is this value, never a hardcoded true.
+                    "assertion_held": held,
+                    "measured": "the worker's own manifest (no source was contacted by this "
+                                "row: measurement_target='worker')",
                     "probe_contract_version": PROBE_CONTRACT_VERSION,
                     "note": "the worker refuses to mark a Mail capability supported before "
                             "it has been measured on this Mac",
@@ -542,7 +591,9 @@ def _probe_manifest(context: ProbeContext, capability: Capability) -> dict:
                 observed_version=WORKER_VERSION,
                 observed_version_reason=("the worker's own version: this row describes the "
                                          "worker's manifest, not Mail"),
-                values_from_source=False)
+                values_from_source=False,
+                measurement_target=O.MEASUREMENT_WORKER)
+
 
 
 def _probe_health(context: ProbeContext, capability: Capability) -> dict:
