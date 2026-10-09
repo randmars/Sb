@@ -94,6 +94,20 @@ ENDPOINTS: dict = {
                                  "cursor-based pagination."},
 }
 
+def resolve_path(path: str, path_params: Optional[dict]) -> str:
+    """Substitute a documented path template's parameters, or say that one is missing.
+
+    O12 documents ``GET /v1/accounts/{accountID}/contacts/list``. Building the request from
+    the template without substituting ``{accountID}`` would put a literal placeholder on the
+    wire -- a request no install serves -- which is exactly the kind of silent nonsense this
+    worker refuses. Every placeholder in the path must be supplied.
+    """
+    resolved = path
+    for key, value in (path_params or {}).items():
+        resolved = resolved.replace("{" + key + "}", urllib.parse.quote(str(value), safe=""))
+    return resolved
+
+
 #: Asks the pack does not answer. Kept as data so the refusal message can name the ask and
 #: the smallest next action instead of inventing a path.
 UNDOCUMENTED_ASKS: dict = {
@@ -164,7 +178,8 @@ class BeeperTransport(abc.ABC):
 
     @abc.abstractmethod
     def call(self, operation: str, *, params: Optional[dict] = None,
-             form: Optional[dict] = None) -> O.Outcome: ...
+             form: Optional[dict] = None,
+             path_params: Optional[dict] = None) -> O.Outcome: ...
 
     def host_gate(self) -> Optional[O.Outcome]:
         """The precondition that would block *any* request from this host, or None.
@@ -265,9 +280,10 @@ class HttpBeeperTransport(BeeperTransport):
         outcome.source_contacted = False
         return outcome
 
-    def _request(self, operation: str, params: Optional[dict], form: Optional[dict]):
+    def _request(self, operation: str, params: Optional[dict], form: Optional[dict],
+                 resolved_path: str):
         meta = ENDPOINTS[operation]
-        path = meta["path"]
+        path = resolved_path
         url = self.base_url + path
         if params:
             url = url + "?" + urllib.parse.urlencode(params, doseq=True)
@@ -291,7 +307,8 @@ class HttpBeeperTransport(BeeperTransport):
         return urllib.request.urlopen(request, timeout=self.timeout_s)
 
     def call(self, operation: str, *, params: Optional[dict] = None,
-             form: Optional[dict] = None) -> O.Outcome:
+             form: Optional[dict] = None,
+             path_params: Optional[dict] = None) -> O.Outcome:
         if operation not in ENDPOINTS:
             return self._blocked_outcome(O.Outcome.unsupported(
                 f"{operation!r} is not a documented Beeper read: the pack names "
@@ -300,20 +317,30 @@ class HttpBeeperTransport(BeeperTransport):
         blocked = self._host_supported() or self._token_gate()
         if blocked is not None:
             return self._blocked_outcome(blocked)
+        # The documented contacts path is a *template* (O12: GET
+        # /v1/accounts/{accountID}/contacts/list). A path parameter that is never
+        # substituted would put the literal "{accountID}" on the wire, so the resolved
+        # path is built here and reported in the document.
+        resolved_path = resolve_path(ENDPOINTS[operation]["path"], path_params)
         started = time.monotonic()
         try:
-            response = self._request(operation, params, form)
+            response = self._request(operation, params, form, resolved_path)
         except urllib.error.HTTPError as exc:
-            return self._from_http_error(operation, exc, started)
+            outcome = self._from_http_error(operation, exc, started)
         except urllib.error.URLError as exc:
-            return self._from_url_error(operation, exc, started)
+            outcome = self._from_url_error(operation, exc, started)
         except (OSError, ValueError) as exc:
-            return self._stamp(O.Outcome.retryable(
+            outcome = self._stamp(O.Outcome.retryable(
                 f"the request to {operation} could not be completed: "
                 f"{type(exc).__name__}: {exc}",
                 reason="request_failed", next_action="retry the read",
                 duration_ms=_ms(started)))
-        return self._from_response(operation, response, started)
+        else:
+            outcome = self._from_response(operation, response, started)
+        if isinstance(outcome.data, dict):
+            outcome.data.setdefault("path_resolved", resolved_path)
+            outcome.data.setdefault("path_params_supplied", sorted(path_params or {}))
+        return outcome
 
     # -- responses ---------------------------------------------------------
     def _stamp(self, outcome: O.Outcome, *, extra: Optional[dict] = None) -> O.Outcome:
@@ -512,7 +539,8 @@ class RecordedBeeperTransport(BeeperTransport):
         return self._out(O.Outcome.ok(document))
 
     def call(self, operation: str, *, params: Optional[dict] = None,
-             form: Optional[dict] = None) -> O.Outcome:
+             form: Optional[dict] = None,
+             path_params: Optional[dict] = None) -> O.Outcome:
         if operation not in ENDPOINTS:
             return self._out(O.Outcome.unsupported(
                 f"{operation!r} is not a documented Beeper read: the pack names "

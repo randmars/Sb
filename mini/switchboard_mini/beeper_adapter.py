@@ -453,7 +453,11 @@ class BeeperReadOnlyAdapter:
         if cursor:
             params["cursor"] = cursor
             params["direction"] = direction
-        got = self.transport.call("contacts", params=params)
+        # O12's path is a template: the account id is a *path* parameter, not a query
+        # parameter (putting it in ``params`` would send an undocumented query field and
+        # still leave the placeholder on the wire).
+        got = self.transport.call("contacts", params=params,
+                                  path_params={"accountID": account_id})
         if not got.usable:
             return self._stamp(got, account_id=account_id)
         document = (got.data or {}).get("document") or {}
