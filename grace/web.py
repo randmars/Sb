@@ -494,7 +494,6 @@ def _make_handler(app: WebServer) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
             if self.command != "HEAD":
                 self.wfile.write(body)
-            self.app.requests_served += 1
 
         def _json(self, code: int, payload: Any, *, extra: Optional[dict] = None) -> None:
             body = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode()
@@ -525,12 +524,26 @@ def _make_handler(app: WebServer) -> type[BaseHTTPRequestHandler]:
             self._handle("POST")
 
         def do_PUT(self) -> None:  # noqa: N802
+            self._count()
             self._error(405, "method_not_allowed", "Only GET and POST are served here.")
 
         def do_DELETE(self) -> None:  # noqa: N802
+            self._count()
             self._error(405, "method_not_allowed", "Only GET and POST are served here.")
 
+        def _count(self) -> None:
+            """Count one request the moment this handler accepts it.
+
+            Defect fixed 2026-10-09: this used to run at the end of ``_send``, *after*
+            ``self.wfile.write(body)`` had flushed the response, so a client could read a
+            complete response while ``requests_served`` had not yet recorded it. The counter is
+            now incremented before any response byte is produced, which is what makes it a
+            faithful count of the requests this handler accepted.
+            """
+            self.app.requests_served += 1
+
         def _handle(self, method: str) -> None:
+            self._count()
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
             query = parse_qs(parsed.query, keep_blank_values=True)

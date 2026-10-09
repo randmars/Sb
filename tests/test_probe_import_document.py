@@ -22,12 +22,23 @@ Shapes covered (each with a case below):
 * a missing file
 * a document with no rows at all (nothing to store is not a success)
 
+The advice has to work (defect fixed here, 2026-10-09). Every one of these refusals used to
+close with ``jq -s '{rows: .}' <file> > <file>.json``, which is the right wrap for a JSONL
+*run* and useless for a bare array (``{"rows": [1,2,3]}``), an object without ``rows``
+(``{"rows": {"hello": "world"}}``) or a file that is not JSON at all -- each would be
+refused again, so the "smallest next action" pointed at a dead end. A refusal now names
+either the transform that works for that shape, or the run to take. Where a command is
+printed, the tests below run that command and import what it writes.
+
 Nothing here contacts a source, and no row is stored by any of it.
 """
 
 from __future__ import annotations
 
 import json
+import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -84,6 +95,37 @@ class TestTheLoaderAnswersEveryShapeWithATypedReason(unittest.TestCase):
         result = self.load(json.dumps([ONE_ROW]))
         self.assertFalse(result["ok"])
         self.assertEqual(result["reason"], I.PROBE_DOCUMENT_WRONG_SHAPE)
+
+    def test_a_bare_array_of_rows_is_told_to_name_it_as_rows(self) -> None:
+        """The rows list without its key: `jq '{rows: .}'` names it, and that imports."""
+        result = self.load(json.dumps([ONE_ROW]), "/tmp/array.json")
+        self.assertEqual(result["reason"], I.PROBE_DOCUMENT_WRONG_SHAPE)
+        self.assertIn("jq '{rows: .}' /tmp/array.json > /tmp/array.json.json",
+                      result["next_action"])
+
+    def test_a_bare_array_of_things_that_are_not_rows_is_told_to_take_a_run(self) -> None:
+        result = self.load(json.dumps([1, 2, 3]), "/tmp/array.json")
+        self.assertEqual(result["reason"], I.PROBE_DOCUMENT_WRONG_SHAPE)
+        self.assertIn("switchboard-mini probe", result["next_action"])
+        self.assertNotIn("jq -s '{rows: .}' /tmp/array.json", result["next_action"])
+
+    def test_an_object_without_rows_is_told_to_take_a_run_not_to_wrap_itself(self) -> None:
+        result = self.load(json.dumps({"hello": "world"}), "/tmp/no-rows.json")
+        self.assertEqual(result["reason"], I.PROBE_DOCUMENT_WRONG_SHAPE)
+        self.assertIn("switchboard-mini probe", result["next_action"])
+        self.assertNotIn("jq -s '{rows: .}' /tmp/no-rows.json", result["next_action"])
+
+    def test_a_single_row_object_is_told_how_a_one_row_run_is_wrapped(self) -> None:
+        result = self.load(json.dumps(ONE_ROW), "/tmp/one-row.json")
+        self.assertEqual(result["reason"], I.PROBE_DOCUMENT_WRONG_SHAPE)
+        self.assertIn("jq '{rows: [.]}' /tmp/one-row.json > /tmp/one-row.json.json",
+                      result["next_action"])
+
+    def test_a_file_that_is_not_json_is_never_told_to_wrap_itself(self) -> None:
+        result = self.load("probe output, but not JSON", "/tmp/notjson.txt")
+        self.assertEqual(result["reason"], I.PROBE_DOCUMENT_NOT_JSON)
+        self.assertIn("switchboard-mini probe", result["next_action"])
+        self.assertNotIn("jq -s '{rows: .}' /tmp/notjson.txt", result["next_action"])
 
     def test_valid_json_of_the_wrong_shape_is_refused(self) -> None:
         for text in (json.dumps({"rows": {"not": "a list"}}),
@@ -173,6 +215,56 @@ class TestTheCliRefusesMalformedInput(GraceTestCase):
                                   I.PROBE_DOCUMENT_WRONG_SHAPE)
         self.assertEqual(payload["data"]["reason"], I.PROBE_DOCUMENT_WRONG_SHAPE)
         self.assertIn("rows", payload["message"])
+
+    def advised_command(self, payload: dict) -> tuple[str, Path]:
+        """The one command a refusal printed, and the file it says it will write."""
+        match = re.search(r"`([^`]+)`", payload["data"]["next_action"])
+        self.assertIsNotNone(match, payload["data"]["next_action"])
+        command = match.group(1)
+        self.assertTrue(command.startswith("jq "), command)
+        return command, Path(command.split(">")[-1].strip())
+
+    @unittest.skipUnless(shutil.which("jq"), "jq is not installed on this host")
+    def test_the_advice_for_a_bare_array_of_rows_imports_what_it_writes(self) -> None:
+        rows = [dict(ONE_ROW, capability="cap_1"), dict(ONE_ROW, capability="cap_2")]
+        payload = self.run_import("array.json", json.dumps(rows),
+                                  I.PROBE_DOCUMENT_WRONG_SHAPE)
+        command, produced = self.advised_command(payload)
+        subprocess.run(command, shell=True, check=True, cwd=self.dir)
+        self.assertTrue(produced.exists(), command)
+        proc = run_cli_raw(self.db, "probe-import", "--file", str(produced),
+                           "--account", self.account)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        result = json.loads(proc.stdout)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["data"]["imported"], 2, result)
+
+    @unittest.skipUnless(shutil.which("jq"), "jq is not installed on this host")
+    def test_the_advice_for_a_single_row_imports_what_it_writes(self) -> None:
+        payload = self.run_import("one-row.json", json.dumps(ONE_ROW),
+                                  I.PROBE_DOCUMENT_WRONG_SHAPE)
+        command, produced = self.advised_command(payload)
+        subprocess.run(command, shell=True, check=True, cwd=self.dir)
+        proc = run_cli_raw(self.db, "probe-import", "--file", str(produced),
+                           "--account", self.account)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(json.loads(proc.stdout)["data"]["imported"], 1)
+
+    def test_a_rows_list_holding_something_that_is_not_a_row_is_a_typed_refusal(self) -> None:
+        """Nested lists happen (``jq -s '{rows: [.]}'`` nests a row); they must not crash."""
+        for rows in ([1, 2, 3], [[dict(ONE_ROW)]], [dict(ONE_ROW), "nope"]):
+            with self.subTest(rows=str(rows)[:40]):
+                path = self.dir / "nested.json"
+                path.write_text(json.dumps({"rows": rows}))
+                proc = run_cli_raw(self.db, "probe-import", "--file", str(path),
+                                   "--account", self.account)
+                self.assertNotIn("Traceback", proc.stderr, proc.stderr)
+                self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+                payload = json.loads(proc.stdout)
+                self.assertFalse(payload["ok"], payload)
+                self.assertTrue(payload["data"]["problems"], payload)
+                self.assertEqual(payload["data"]["imported"], 0)
+        self.assertEqual(stored_probe_rows(self.svc.store), self.before)
 
     def test_valid_json_of_the_wrong_shape_is_refused(self) -> None:
         self.run_import("rows_not_a_list.json", json.dumps({"rows": "nope"}),

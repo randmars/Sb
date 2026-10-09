@@ -200,8 +200,9 @@ def _build_parser() -> argparse.ArgumentParser:
                          "<label> --out rows.jsonl` — there is no `--json` flag. Wrap it "
                          f"before importing: `{PROBE_DOCUMENT_WRAP} rows.jsonl > rows.json`. "
                          "Anything else (an unwrapped JSONL run, an empty file, a bare "
-                         "array, a non-JSON file) is refused with a typed reason and nothing "
-                         "is stored")
+                         "array, a non-JSON file) is refused with a typed reason, the "
+                         "smallest next action that works for that shape, and nothing "
+                         "stored")
     pi.add_argument("--account", required=True, help="the source_account_id these rows describe")
     pi.add_argument("--actor", default="probe-import")
 

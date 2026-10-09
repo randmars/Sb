@@ -819,6 +819,10 @@ def probe_row_problems(row: dict) -> list[str]:
     answered from a source unless it says a real source was connected.
     """
     problems: list[str] = []
+    if not isinstance(row, dict):
+        # A 'rows' list holding something that is not a row is a malformed document, so it
+        # is a typed refusal like every other one -- not an AttributeError (2026-10-09).
+        return [f"row is a JSON {_json_kind(row)}, not a capability row"]
     name = row.get("capability") or row.get("name")
     if not name:
         problems.append("row has no capability name")
@@ -979,6 +983,22 @@ def probe_row_handover(store: Store, account_id: str, rows: Iterable[dict]) -> d
             "problems": sorted(problems)}
 
 
+def _worker_self_clause(worker_self: list[dict]) -> str:
+    """``; 1 row measures the worker itself (manifest), not a source``.
+
+    Count-correct for one row and for many, and the capability name is read off the rows
+    (``capability`` on a probe row, ``name`` on a stored one). A row that names nothing is
+    described without a name: this sentence is shown to the owner, and ``(?)`` is not a
+    capability. Defect fix, 2026-10-09.
+    """
+    names = sorted({(row.get("capability") or row.get("name") or "").strip()
+                    for row in worker_self} - {""})
+    count = len(worker_self)
+    noun, verb = ("row", "measures") if count == 1 else ("rows", "measure")
+    named = f" ({', '.join(names)})" if names else ""
+    return f"; {count} {noun} {verb} the worker itself{named}, not a source"
+
+
 def probe_provenance(rows: list[dict]) -> dict:
     """What a set of probe rows honestly says about where its values came from.
 
@@ -1012,11 +1032,7 @@ def probe_provenance(rows: list[dict]) -> dict:
                      + (f", {len(documentation)} are documented-only reads"
                         if documentation else "")
                      + (f", {len(fixture)} came from recorded fixtures" if fixture else "")
-                     + (f"; {len(worker_self)} measure the worker itself ("
-                        + ", ".join(sorted(r.get("capability") or r.get("name") or "?"
-                                           for r in worker_self))
-                        + "), not a source"
-                        if worker_self else "")
+                     + (_worker_self_clause(worker_self) if worker_self else "")
                      + ". Nothing here is an observation of Randy's Mac.")
     return {"rows": total, "real_source_connected": len(connected),
             "documentation_rows": len(documentation), "fixture_rows": len(fixture),
@@ -1052,13 +1068,87 @@ PROBE_DOCUMENT_REASONS = (PROBE_DOCUMENT_UNREADABLE, PROBE_DOCUMENT_EMPTY,
 
 #: The documented wrap, as the readiness pack and ``probe-import --help`` both give it.
 PROBE_DOCUMENT_WRAP = "jq -s '{rows: .}'"
+#: A bare JSON array of probe rows: the rows list without its key. ``jq '{rows: .}'``.
+PROBE_DOCUMENT_NAME_ROWS = "jq '{rows: .}'"
+#: One probe row on its own, wrapped as the one-row run it is: ``jq '{rows: [.]}'``.
+#: Not ``-s``: slupring first makes the whole file the one element and nests the row in a
+#: list inside the list, which Grace then refuses. Run, not assumed (2026-10-09).
+PROBE_DOCUMENT_NAME_ONE_ROW = "jq '{rows: [.]}'"
+#: The run itself, as the pack takes it. Every refusal that prints a command to take a run
+#: prints this one, and it was run before it was written down.
+PROBE_DOCUMENT_TAKE_RUN = ("bash mini/bin/switchboard-mini probe --account <label> "
+                           "--out run.jsonl")
+
+# Advice fixed 2026-10-09. Every refusal used to close with the JSONL wrap applied to the
+# file at hand, which works only for a JSONL run. Applied to a bare array, an object without
+# ``rows`` or a file that is not JSON it produced a document Grace refuses again -- a "smallest
+# next action" that led nowhere. A refusal now names the transform that fits *that* shape, or
+# the run to take instead.
+
+
+def probe_document_wrap_target(source: str) -> str:
+    """Where a wrap of ``source`` lands: ``run.jsonl`` -> ``run.json``, else ``+.json``."""
+    return (re.sub(r"\.jsonl$", ".json", source) if source.endswith(".jsonl")
+            else source + ".json")
 
 
 def probe_document_wrap_next_action(source: str) -> str:
     """``jq -s '{rows: .}' run.jsonl > run.json`` for a real path: the smallest next action."""
-    target = (re.sub(r"\.jsonl$", ".json", source) if source.endswith(".jsonl")
-              else source + ".json")
-    return f"{PROBE_DOCUMENT_WRAP} {source} > {target}"
+    return f"{PROBE_DOCUMENT_WRAP} {source} > {probe_document_wrap_target(source)}"
+
+
+def probe_document_run_next_action(source: str) -> str:
+    """A file that is not a probe run: take one. No wrap of this file can help."""
+    return (f"this file is not a probe run and no wrap of it can make it one: take a run "
+            f"with `{PROBE_DOCUMENT_TAKE_RUN}`, wrap it "
+            f"(`{PROBE_DOCUMENT_WRAP} run.jsonl > run.json`) and import the file that writes")
+
+
+def probe_document_rows_list_next_action(source: str) -> str:
+    """A bare JSON array of probe rows is the rows list without its key: name it as one."""
+    return (f"this file is the 'rows' list without its key: name it "
+            f"(`{PROBE_DOCUMENT_NAME_ROWS} {source} > "
+            f"{probe_document_wrap_target(source)}`) and import the file that writes")
+
+
+def probe_document_single_row_next_action(source: str) -> str:
+    """One probe row on its own: a run of one row, wrapped as such."""
+    return (f"this file is one probe row, not a run: wrap it as the one-row run it is "
+            f"(`{PROBE_DOCUMENT_NAME_ONE_ROW} {source} > "
+            f"{probe_document_wrap_target(source)}`) and import the file that writes")
+
+
+def probe_document_take_run_next_action() -> str:
+    """Nothing was measured: take a run that measures something and import its output."""
+    return (f"take a run that measures something (`{PROBE_DOCUMENT_TAKE_RUN}`) and import "
+            f"the rows it emits")
+
+
+def _json_kind(value) -> str:
+    """How to name a JSON value in a sentence, without Python's type names leaking out."""
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    if value is None:
+        return "null"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "list"
+    return "object"
+
+
+def _looks_like_probe_row(value) -> bool:
+    """A probe row names the capability it is about; nothing else is a row."""
+    return isinstance(value, dict) and bool(value.get("capability") or value.get("name"))
+
+
+def _is_list_of_probe_rows(value) -> bool:
+    """A bare JSON array of probe rows: the ``rows`` list without its key."""
+    return (isinstance(value, list) and bool(value)
+            and all(isinstance(item, dict) for item in value)
+            and any(_looks_like_probe_row(item) for item in value))
 
 
 def _refused_probe_document(reason: str, problem: str, next_action: str,
@@ -1092,8 +1182,7 @@ def load_probe_document(text: str, *, source: str = "run.jsonl") -> dict:
         return _refused_probe_document(
             PROBE_DOCUMENT_EMPTY,
             "the file is empty: the probe wrote no rows, so there is nothing to import",
-            "re-run the probe and import its output: `bash mini/bin/switchboard-mini probe "
-            "--account <label> --out run.jsonl`", source)
+            probe_document_take_run_next_action(), source)
     try:
         document = json.loads(text)
     except ValueError as err:
@@ -1106,34 +1195,45 @@ def load_probe_document(text: str, *, source: str = "run.jsonl") -> dict:
                 wrap, source)
         return _refused_probe_document(
             PROBE_DOCUMENT_NOT_JSON,
-            f"this file is not JSON, so it is not a probe run or its documented wrap: {err}",
-            f"wrap the run it came from the documented way ({wrap}), or re-run the probe "
-            f"(`bash mini/bin/switchboard-mini probe --out run.jsonl`)", source)
+            f"this file is not JSON, so it is not a probe run -- and a wrap cannot turn "
+            f"text into JSON: {err}",
+            probe_document_run_next_action(source), source)
     if not isinstance(document, dict):
+        if _is_list_of_probe_rows(document):
+            return _refused_probe_document(
+                PROBE_DOCUMENT_WRONG_SHAPE,
+                "the document is a JSON array of probe rows, not the object with a 'rows' "
+                "list that Grace reads",
+                probe_document_rows_list_next_action(source), source)
         return _refused_probe_document(
             PROBE_DOCUMENT_WRONG_SHAPE,
-            f"the document is a JSON {type(document).__name__}, not the object with a "
-            f"'rows' list that Grace reads",
-            wrap, source)
+            f"the document is a JSON {_json_kind(document)}, not the object with a 'rows' "
+            f"list that Grace reads",
+            probe_document_run_next_action(source), source)
     if "rows" not in document:
+        if _looks_like_probe_row(document):
+            return _refused_probe_document(
+                PROBE_DOCUMENT_WRONG_SHAPE,
+                "the document is a single probe row, not the object with a 'rows' list that "
+                "Grace reads: a run is what Grace stores, not one row",
+                probe_document_single_row_next_action(source), source)
         return _refused_probe_document(
             PROBE_DOCUMENT_WRONG_SHAPE,
-            "the document has no 'rows' list: a single probe row, or an object without "
-            "'rows', is not a probe run",
-            wrap, source)
+            "the document has no 'rows' list: an object without 'rows' is not a probe run, "
+            "and wrapping it would only put that object inside a 'rows' key",
+            probe_document_run_next_action(source), source)
     rows = document["rows"]
     if not isinstance(rows, list):
         return _refused_probe_document(
             PROBE_DOCUMENT_WRONG_SHAPE,
-            f"'rows' is a JSON {type(rows).__name__}, not a list of capability rows",
-            wrap, source)
+            f"'rows' is a JSON {_json_kind(rows)}, not a list of capability rows",
+            probe_document_run_next_action(source), source)
     if not rows:
         return _refused_probe_document(
             PROBE_DOCUMENT_NO_ROWS,
             "the document has an empty 'rows' list: nothing was measured, so storing it "
             "would report a successful import of nothing",
-            "re-run the probe and import the rows it emits: `bash "
-            "mini/bin/switchboard-mini probe --account <label> --out run.jsonl`", source)
+            probe_document_take_run_next_action(), source)
     return {"ok": True, "rows": rows, "source": source}
 
 
@@ -1158,6 +1258,25 @@ def probe_document_refusal(loaded: dict) -> dict:
             "ok": False}
 
 
+def _provenance_row(row) -> dict:
+    """One row, in the shape :func:`probe_provenance` needs to describe it.
+
+    The capability name travels with the row: without it the statement described a
+    self-measurement it could not name and printed "(?)" at the owner (defect fix,
+    2026-10-09). A "row" that is not an object at all carries nothing to describe.
+    """
+    if not isinstance(row, dict):
+        return {"origin": None, "supported": None, "state": None,
+                "real_source_connected": None, "measurement_target": None,
+                "capability": None, "source": None}
+    return {"origin": row.get("origin"), "supported": row.get("supported"),
+            "state": row.get("state"),
+            "real_source_connected": row.get("real_source_connected"),
+            "measurement_target": row.get("measurement_target", C.MEASUREMENT_SOURCE),
+            "capability": row.get("capability") or row.get("name"),
+            "source": row.get("source")}
+
+
 def import_probe_rows(store: Store, account_id: str, rows: Iterable[dict], *,
                       actor: str = "probe-import") -> dict:
     """Store one probe run's rows. Refuses the whole import if any row over-claims.
@@ -1176,11 +1295,7 @@ def import_probe_rows(store: Store, account_id: str, rows: Iterable[dict], *,
     """
     rows = list(rows)
     problems = [p for row in rows for p in probe_row_problems(row)]
-    provenance = probe_provenance([
-        {"origin": row.get("origin"), "supported": row.get("supported"),
-         "state": row.get("state"), "real_source_connected": row.get("real_source_connected"),
-         "measurement_target": row.get("measurement_target", C.MEASUREMENT_SOURCE),
-         "source": row.get("source")} for row in rows])
+    provenance = probe_provenance([_provenance_row(row) for row in rows])
     refused_result = {"imported": 0, "refused": len(rows), "provenance": provenance,
                       "supersessions": [], "refusals": [], "ok": False}
     if problems:
