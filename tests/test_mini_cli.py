@@ -33,8 +33,11 @@ from switchboard_mini import cli
 from switchboard_mini import outcomes as O
 from switchboard_mini.beeper_adapter import MEASURED_CAPABILITIES as BEEPER_MEASURED
 from switchboard_mini.contacts_adapter import MEASURED_CAPABILITIES as CONTACTS_MEASURED
+from switchboard_mini.hermes_adapter import MEASURED_CAPABILITIES as HERMES_MEASURED
+from switchboard_mini.hermes_transport import TYPED_STATES as HERMES_TYPED_STATES
 from switchboard_mini.mail_adapter import build_adapter, make_ref
-from switchboard_mini.probe import (CAPABILITY_NAMES, DOCUMENTED_CAPABILITY_NAMES, ROW_FIELDS,
+from switchboard_mini.probe import (CAPABILITIES, CAPABILITY_NAMES,
+                                    DOCUMENTED_CAPABILITY_NAMES, ROW_FIELDS,
                                     ROW_LABELLING_FIELDS)
 
 #: Which capability each adapter measures, derived from the adapters themselves rather than
@@ -44,16 +47,31 @@ from switchboard_mini.probe import (CAPABILITY_NAMES, DOCUMENTED_CAPABILITY_NAME
 MEASURED_BY = {
     **{name: "beeper" for name in BEEPER_MEASURED},
     **{name: "contacts" for name in CONTACTS_MEASURED},
+    **{name: "hermes" for name in HERMES_MEASURED},
 }
 #: Every capability an adapter in the worker can measure on a host (fixture mode included).
 MEASURED_CAPABILITIES = tuple(MEASURED_BY)
 #: The rows still answered only by the Gate 2 probe pack: nothing in the worker measures
-#: them, so they stay documentation reads. 13 of the pack's 22 documented capabilities as
-#: of the Contacts slice: the 8 Hermes rows (no adapter yet) and the 5 Beeper rows this
-#: read-only slice deliberately does not build (send, send reconciliation, attachment
-#: materialisation, composer prefill, live event stream).
+#: them, so they stay documentation reads. 5 of the pack's 22 documented capabilities as of
+#: the Hermes slice: the 5 Beeper rows this read-only slice deliberately does not build
+#: (send, send reconciliation, attachment materialisation, composer prefill, live event
+#: stream). The 8 Hermes rows left this set when the Hermes read adapter landed.
 DOCUMENTATION_ONLY_CAPABILITIES = tuple(name for name in DOCUMENTED_CAPABILITY_NAMES
                                         if name not in MEASURED_BY)
+#: Every source a capability in the pack belongs to, in the order the pack declares them.
+SOURCES = tuple(dict.fromkeys(capability.source for capability in CAPABILITIES))
+#: What each source's adapter refuses with on a computer that cannot reach its source, and
+#: the adapter outcome code that reason maps to -- read out of the sources, never typed in
+#: here. Hermes is not a Mac-bound source: its transport's own module docstring says a
+#: ``host_not_macos``-shaped reason "would assert a fact no record in the pack states", so
+#: its refusals come from its own named-reason table (``hermes_transport.TYPED_STATES``). The
+#: remaining sources are the Mac-bound ones, whose transports raise one host-gate reason
+#: before anything is contacted.
+REFUSAL_CODES = {
+    **{source: {"host_not_macos": O.UNSUPPORTED}
+       for source in SOURCES if source != "hermes"},
+    "hermes": {reason: entry["code"] for reason, entry in HERMES_TYPED_STATES.items()},
+}
 
 REPO_MINI = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                          "mini")
@@ -85,7 +103,7 @@ def run_cli(*args: str, fixture: bool = False, state: str = None,
     env = dict(os.environ, PYTHONPATH=REPO_MINI)
     env["SWITCHBOARD_MINI_STATE"] = state or os.path.join(
         tempfile.mkdtemp(prefix="mini-cli-state-"), "state.json")
-    return subprocess.run(argv, capture_output=True, text=True, env=env, cwd=cwd)
+    return subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, cwd=cwd)
 
 
 def json_documents(proc: subprocess.CompletedProcess, case: str) -> list:
@@ -215,10 +233,19 @@ class TestEveryCommandRealMode(CliCaseMixin, unittest.TestCase):
                 self.assertEqual(row["state"], O.UNSUPPORTED)
                 self.assertIn(row["evidence"]["reason"], ABSENT_REASONS)
             else:
-                # every capability that needs Mail is a typed, host-level refusal
+                # Every capability that needs a source is a typed refusal on this host: no
+                # Mail.app, Beeper Desktop, address book or Hermes gateway is reachable from
+                # here. The reason is the row's *own* source adapter's reason and the state is
+                # the code that reason maps to, both read out of the adapters -- a reason
+                # borrowed from another source (a Mac-shaped one on a Hermes row) would be a
+                # claim this host cannot make.
+                reason = row["evidence"]["reason"]
                 self.assertFalse(row["supported"], row["capability"])
-                self.assertEqual(row["state"], O.UNSUPPORTED)
-                self.assertEqual(row["evidence"]["reason"], "host_not_macos")
+                self.assertIn(reason, REFUSAL_CODES[row["source"]],
+                              f"{row['capability']}: {reason!r} is not a reason the "
+                              f"{row['source']} adapter declares")
+                self.assertEqual(row["state"], REFUSAL_CODES[row["source"]][reason],
+                                 f"{row['capability']}: {reason!r} maps to a different state")
         self.assertNoSourceClaimed(rows, "real probe")
 
     def test_probe_claims_nothing_supported_without_measurement(self) -> None:
@@ -420,14 +447,14 @@ class TestFlagPositions(unittest.TestCase):
         # asserted separately; every row this machine actually produced is a labelled fixture.
         fixture_origins = [r["origin"] for r in rows_after if r["origin"] != O.DOCUMENTATION]
         self.assertEqual(fixture_origins, [O.FIXTURE] * len(fixture_origins))
-        # The multi-adapter probe changed what may be asserted here. The Beeper *and*
-        # Contacts adapters are in this run, so the rows for the capabilities they
+        # The multi-adapter probe changed what may be asserted here. The Beeper, Contacts
+        # *and Hermes* adapters are in this run, so the rows for the capabilities they
         # participate in carry their own adapter's origin (a labelled fixture, never
         # `documentation`, never supported) and the documentation row for each of those
         # capabilities is absent from the run altogether: one run emits one row per
-        # capability key. Every capability no adapter in this run measures -- the 8 Hermes
-        # rows, and the 5 Beeper rows this read-only slice deliberately does not build -- is
-        # still the documentation read the pack records, and still unmeasured.
+        # capability key. Every capability no adapter in this run measures -- the 5 Beeper
+        # rows this read-only slice deliberately does not build -- is still the documentation
+        # read the pack records, and still unmeasured.
         by_capability: dict = {}
         for row in rows_after:
             by_capability.setdefault(row["capability"], []).append(row)
@@ -455,7 +482,7 @@ class TestFlagPositions(unittest.TestCase):
                 self.assertFalse(rows_for[0]["supported"])
         # The documentation row for a capability an adapter measures is not in the run at
         # all -- a run may never carry both rows for one capability key. The split this
-        # run actually produced (38 rows: 25 adapter-measured, 13 documentation-only) is
+        # run actually produced (38 rows: 33 adapter-measured, 5 documentation-only) is
         # derived from the adapters, so the next slice moves its own rows without an edit.
         self.assertEqual([r["capability"] for r in documented_rows(rows_after)
                           if r["capability"] in MEASURED_BY], [])
@@ -563,7 +590,7 @@ class TestSerialisationDefect(unittest.TestCase):
             "sys.exit(cli.main(['probe']))\n"
         )
         env = dict(os.environ, PYTHONPATH=REPO_MINI)
-        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+        proc = subprocess.run([sys.executable, "-c", code], stdin=subprocess.DEVNULL, capture_output=True, text=True,
                               env=env, cwd=REPO_MINI)
         self.assertEqual(proc.returncode, HARNESS_EXIT,
                          f"exit {proc.returncode}; stderr={proc.stderr}")

@@ -59,6 +59,16 @@ def worker_self_clause(rows: list[dict]) -> str:
     return f"{count} {noun} {verb} the worker itself{named}, not a source"
 
 
+def unmeasured_clause(count: int) -> str:
+    """The clause the sentence must carry for ``count`` unmeasured rows, verb and all.
+
+    Count-correct for one and for many (defect fixed 2026-10-09: the sentence read
+    "1 are unmeasured" for a single row). Derived here rather than written out, so the test
+    cannot agree with the sentence by both being wrong.
+    """
+    return f"{count} is unmeasured" if count == 1 else f"{count} are unmeasured"
+
+
 class TestTheSentenceOverTheRealDocument(GraceTestCase):
     """The real 38-row run: the sentence names the manifest row instead of printing '?'."""
 
@@ -95,7 +105,7 @@ class TestTheSentenceOverTheRealDocument(GraceTestCase):
         fixture = [r for r in self.rows if r["origin"] in (C.FIXTURE, C.MOCK)]
         self.assertIn(f"No source was contacted by any of the {len(self.rows)} "
                       f"capability rows", statement)
-        self.assertIn(f"{len(unmeasured)} are unmeasured", statement)
+        self.assertIn(unmeasured_clause(len(unmeasured)), statement)
         self.assertIn(f"{len(documented)} are documented-only reads", statement)
         if fixture:
             self.assertIn(f"{len(fixture)} came from recorded fixtures", statement)
@@ -203,6 +213,24 @@ class TestTheSentenceForZeroOneAndManySelfMeasurements(unittest.TestCase):
         """A population with no fixture rows must not say '0 came from recorded fixtures'."""
         statement = probe_provenance([self.row("mail_accounts")])["statement"]
         self.assertNotIn("0 ", statement)
+
+    def test_one_unmeasured_row_takes_the_singular_verb(self) -> None:
+        """The wart the lead found: one unmeasured row used to read '1 are unmeasured'.
+
+        The Hermes fixture run is the population this was seen on (one unmeasured row, eight
+        fixture rows), and the same sentence is derived from the stored rows.
+        """
+        one = self.row("mail_accounts", state=C.PROBE_UNMEASURED)
+        statement = probe_provenance([one])["statement"]
+        self.assertIn("1 is unmeasured", statement)
+        self.assertNotIn("1 are unmeasured", statement)
+
+    def test_two_unmeasured_rows_still_take_the_plural_verb(self) -> None:
+        """...and the singular fix must not have broken the plural."""
+        rows = [self.row("mail_accounts", state=C.PROBE_UNMEASURED),
+                self.row("mail_messages", state=C.PROBE_UNMEASURED)]
+        statement = probe_provenance(rows)["statement"]
+        self.assertIn("2 are unmeasured", statement)
 
     def test_the_supported_count_is_reported_without_claiming_a_source(self) -> None:
         """A worker self-measurement may be supported; that never makes it a source read."""

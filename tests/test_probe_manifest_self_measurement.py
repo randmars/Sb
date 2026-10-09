@@ -85,7 +85,7 @@ def wrap_with_jq(jsonl: Path, out: Path) -> str:
     """Wrap one JSONL run the way the Gate 2 pack documents: ``jq -s '{rows: .}'``."""
     if shutil.which("jq"):
         proc = subprocess.run(["jq", "-s", "{rows: .}", str(jsonl)],
-                              capture_output=True, text=True, check=True)
+                              stdin=subprocess.DEVNULL, capture_output=True, text=True, check=True)
         out.write_text(proc.stdout)
         return "jq"
     rows = [json.loads(line) for line in jsonl.read_text().splitlines() if line.strip()]

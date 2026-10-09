@@ -1,0 +1,51 @@
+{
+ "scenario": "endpoint_absent",
+ "label": "FIXTURE:hermes('endpoint_absent' recorded scenario)",
+ "recorded_from": "a Hermes API server (O17) as described by the probe pack; recorded by hand for this repository, not captured from Randy's install",
+ "note": "The recorded build did not serve the documented discovery, health, session or run paths: 404 everywhere. O17 states no version-to-capability mapping, so this is a measurement of a build, not a defect -- and a missing required endpoint blocks the release claim instead of being simulated.",
+ "disclaimer": "A recorded result, not a live connection: this file holds what a read returned when it was recorded, so the worker's parsing, refusals and row contract can be exercised on a host that has no Hermes gateway. Every document built from it is labelled FIXTURE: and can never claim a real source. No token value is stored here: only whether a key was configured.",
+ "base_url": "http://127.0.0.1:8642",
+ "token_present": true,
+ "token_env": "API_SERVER_KEY",
+ "responses": {
+  "capabilities": {
+   "status": 404
+  },
+  "toolsets": {
+   "status": 404
+  },
+  "skills": {
+   "status": 404
+  },
+  "health": {
+   "status": 404
+  },
+  "health_v1": {
+   "status": 404
+  },
+  "health_detailed": {
+   "status": 404
+  },
+  "sessions": {
+   "status": 404
+  },
+  "session": {
+   "status": 404
+  },
+  "session_messages": {
+   "status": 404
+  },
+  "run": {
+   "status": 404
+  },
+  "run_submit": {
+   "status": 404
+  },
+  "run_events": {
+   "status": 404
+  },
+  "run_stop": {
+   "status": 404
+  }
+ }
+}

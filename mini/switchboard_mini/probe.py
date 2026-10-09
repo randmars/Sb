@@ -47,6 +47,7 @@ probe run -- that is the whole point of probing.
 
 from __future__ import annotations
 
+import time
 import traceback
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
@@ -259,7 +260,8 @@ class ProbeContext:
                  mailbox: Optional[str] = None, max_scan: int = 2000,
                  beeper_account_id: Optional[str] = None,
                  beeper_ui_oldest_visible: Optional[str] = None,
-                 contacts: Optional[dict] = None):
+                 contacts: Optional[dict] = None,
+                 hermes: Optional[dict] = None):
         # One run may carry several adapters: the Mail adapter measures the Mail rows and
         # the Beeper adapter measures the Beeper rows, so one probe run produces exactly
         # one row per capability key and a documentation row is only ever emitted for a
@@ -284,6 +286,16 @@ class ProbeContext:
         # key symbol the owner read from the SDK header, the file a two-run identifier
         # comparison uses). They are passed in as data so one Context serves every source.
         self._contacts = dict(contacts or {})
+        # The Hermes reads take parameters a probe run does not discover either: a run id
+        # the owner names, the explicit consent to create the probe's own frozen run, the
+        # owner's own `terminal.backend` value, his observation of the approval path, and
+        # the version string only he can read. Passed as data so one Context serves every
+        # source and so no row has to invent one.
+        self._hermes = dict(hermes or {})
+        # The run this probe run itself created (``--submit-test-run``), recorded so the
+        # run-scoped rows read it instead of refusing for a missing ``--run-id`` (audit
+        # finding 2). Kept apart from the owner-named id: an owner-named id always wins.
+        self._hermes_created_run_id: Optional[str] = None
         self._memo: dict = {}
         self.harness_errors: list = []
 
@@ -310,6 +322,57 @@ class ProbeContext:
 
     def contacts_limit(self) -> int:
         return int(self._contacts.get("limit") or 25)
+    # -- the Hermes parameters ---------------------------------------------
+    def hermes_run_id(self) -> Optional[str]:
+        """The run the run-scoped rows act on: the owner names it, or the probe created
+        its own frozen run and recorded its id with
+        :meth:`hermes_note_created_run_id`. Never an invented id, and an
+        owner-named id always wins over the probe's own."""
+        return self._hermes.get("run_id") or self._hermes_created_run_id
+
+    def hermes_note_created_run_id(self, run_id: Optional[str]) -> None:
+        """Record the run this probe run created, so the run-scoped rows read *that* run.
+
+        Defect fix (audit finding 2): the run the probe's own ``--submit-test-run`` created
+        was used only inside the submission row, so the events and stop rows refused for a
+        missing run id and advised the reader to pass the flag they had just passed. The id
+        is memoised here, in the one context the whole run shares.
+        """
+        if run_id:
+            self._hermes_created_run_id = str(run_id)
+
+    def hermes_run_id_source(self) -> Optional[str]:
+        """Who the run id the run-scoped rows use came from, or None if there is none."""
+        if self._hermes.get("run_id"):
+            return "the owner (--run-id)"
+        if self._hermes_created_run_id:
+            return ("this probe's own frozen test run (--submit-test-run), recorded in "
+                    "this run's context")
+        return None
+
+    def hermes_submit_test_run(self) -> bool:
+        """Explicit consent for the one run this worker may ever create."""
+        return bool(self._hermes.get("submit_test_run"))
+    def hermes_terminal_backend(self) -> Optional[str]:
+        return self._hermes.get("terminal_backend")
+    def hermes_approval_observation(self) -> Optional[str]:
+        return self._hermes.get("approval_observation")
+    def hermes_version(self) -> Optional[str]:
+        return self._hermes.get("version")
+    def hermes_session_id(self) -> Optional[str]:
+        return self._hermes.get("session_id")
+    def hermes_session_limit(self) -> int:
+        return int(self._hermes.get("limit") or 25)
+    def hermes_settle_seconds(self) -> float:
+        from .hermes_transport import DEFAULT_SETTLE_SECONDS
+        return float(self._hermes.get("settle_seconds") or DEFAULT_SETTLE_SECONDS)
+    def hermes_settle_interval(self) -> float:
+        from .hermes_transport import DEFAULT_SETTLE_INTERVAL
+        return float(self._hermes.get("settle_interval") or DEFAULT_SETTLE_INTERVAL)
+    def hermes_sleep(self, seconds: float) -> None:
+        # The probe's own wait between two status polls. Overridable so a test drives the
+        # settling path without waiting.
+        self._hermes.get("sleep", time.sleep)(seconds)
 
     # -- memoized reads ----------------------------------------------------
     def _once(self, key: str, call: Callable[[], Any]) -> Any:
@@ -421,16 +484,25 @@ def _row(context: ProbeContext, capability: Capability, *, supported: bool, stat
          observed_version: Optional[str] = None,
          observed_version_reason: Optional[str] = None,
          values_from_source: Optional[bool] = None,
+         source_contacted: Optional[bool] = None,
          origin: Optional[str] = None, adapter_is_real: Optional[bool] = None,
          citations: Optional[tuple] = None, label: Optional[str] = None,
          supersedes: Optional[dict] = None,
-         measurement_target: Optional[str] = None) -> dict:
+         measurement_target: Optional[str] = None,
+         stand_in: Optional[bool] = None) -> dict:
     """Build one row, enforcing the rules that keep a row from over-claiming.
 
     ``observed_version`` is **never** defaulted from another row's read: a caller that
     observed a version passes it (with what it came from), and every other row reports
     the literal ``not_observed`` and the reason. ``supported`` is refused outright for a
     documentation-origin row, because a page is not a measurement.
+
+    ``source_contacted`` is the outcome's own provenance flag, passed by a caller that has
+    one. When it is given, the row's ``real_source_connected`` **is** that value — the row
+    rule no longer re-derives it from ``adapter_is_real`` + ``values_from_source`` (defect
+    fix, audit finding 5: the re-derivation was only as honest as the transport's own flag,
+    and a stub injected through the ``opener`` seam used to mint ``real_source_connected:
+    true`` rows). A caller with no outcome to hand keeps the previous behaviour.
 
     ``limitation`` may be given by a caller whose source adapter has its own, more accurate
     sentence than the pack's documentation text (a caller that does not pass one keeps the
@@ -440,10 +512,27 @@ def _row(context: ProbeContext, capability: Capability, *, supported: bool, stat
     which never touches a source. The worker-side half of that rule is here: the marker is
     refused for any capability that is not a frozen worker self-measurement, and a
     self-measurement may carry no source values.
+
+    ``stand_in`` says a **labelled loopback stand-in** answered this row rather than the
+    source. It is a first-class row field (not evidence-only), it forces the ``STAND-IN:``
+    label and its disclaimer into the label column even though ``origin`` stays ``real``
+    (the real transport class produced the row), and it refuses a support claim outright:
+    a stand-in is not an observation of anything, so it can never be a measurement.
     """
     row_origin = origin or context.origin
+    row_stand_in = bool(stand_in)
     row_cites = tuple(citations if citations is not None else capability.citations)
     row_target = measurement_target or O.MEASUREMENT_SOURCE
+    row_adapter_is_real = (bool(context.adapter_is_real) if adapter_is_real is None
+                           else bool(adapter_is_real))
+    row_values_from_source = (state in (O.SUCCESS, O.PARTIAL)
+                              if values_from_source is None
+                              else bool(values_from_source))
+    # ``real_source_connected`` means "a real source was contacted and this value came from
+    # it" everywhere in the product, so where the caller passes the outcome's own
+    # ``source_contacted`` the row says exactly that and nothing is re-derived.
+    row_real_source_connected = (bool(source_contacted) if source_contacted is not None
+                                 else bool(row_adapter_is_real and row_values_from_source))
     if row_target not in O.MEASUREMENT_TARGETS:
         raise ValueError(
             f"probe row {capability.name!r}: measurement_target {row_target!r} is not one "
@@ -470,11 +559,22 @@ def _row(context: ProbeContext, capability: Capability, *, supported: bool, stat
             "could be observed on any host")
     if not O.probe_row_supported_claim_allowed({
             "origin": row_origin, "supported": bool(supported),
-            "values_from_source": bool(values_from_source),
-            "real_source_connected": bool(adapter_is_real and values_from_source)}):
+            "stand_in": row_stand_in,
+            "values_from_source": bool(row_values_from_source),
+            "real_source_connected": bool(row_real_source_connected)}):
         raise ValueError(
             f"probe row {capability.name!r}: a documentation-origin row may never be "
-            "supported=true (probe-pack scope statement)")
+            "supported=true (probe-pack scope statement), and a row a labelled stand-in "
+            "answered may never be supported either (a stand-in is not a source)")
+    if row_stand_in and row_real_source_connected:
+        raise ValueError(
+            f"probe row {capability.name!r}: stand_in=true says a labelled loopback "
+            "stand-in answered this row, so it may not also claim a real source was "
+            "connected")
+    if row_stand_in and row_values_from_source:
+        raise ValueError(
+            f"probe row {capability.name!r}: stand_in=true says a labelled loopback "
+            "stand-in answered this row, so it carries no source values")
     row = {
         "capability": capability.name,
         "title": capability.title,
@@ -499,15 +599,13 @@ def _row(context: ProbeContext, capability: Capability, *, supported: bool, stat
         # the product ("a real source was contacted and this value came from it"). On this
         # Linux computer the real adapter answers every row with a typed refusal, so every
         # row is false; only a real probe on a Mac can make it true.
-        "adapter_is_real": (bool(context.adapter_is_real)
-                            if adapter_is_real is None else bool(adapter_is_real)),
-        "values_from_source": (state in (O.SUCCESS, O.PARTIAL)
-                               if values_from_source is None
-                               else bool(values_from_source)),
-        "real_source_connected": bool(
-            (context.adapter_is_real if adapter_is_real is None else adapter_is_real)
-            and (state in (O.SUCCESS, O.PARTIAL)
-                 if values_from_source is None else bool(values_from_source))),
+        "adapter_is_real": row_adapter_is_real,
+        "values_from_source": row_values_from_source,
+        "real_source_connected": row_real_source_connected,
+        # Did a labelled loopback stand-in answer this row, rather than the source? A
+        # first-class field so a reader does not have to open ``evidence`` to find out, and
+        # so Grace can keep such a row out of the "measured on this host" population.
+        "stand_in": row_stand_in,
         # What this row measured: a source, or -- for the worker's own manifest row, and
         # only there -- the worker itself.
         "measurement_target": row_target,
@@ -529,6 +627,13 @@ def _row(context: ProbeContext, capability: Capability, *, supported: bool, stat
         else:
             row["label"] = label or context.label or O.fixture_label(capability.source)
         row["disclaimer"] = O.disclaimer_for(row["origin"], source=capability.source)
+    elif row_stand_in:
+        # A stand-in row is ``origin: real`` (the real transport class produced it) and yet
+        # no source answered it, so the label column has to carry that. This is the fix for
+        # the hole the lead drove: the only tell used to be inside ``evidence``.
+        row["label"] = label or O.stand_in_label(capability.source)
+        row["disclaimer"] = O.disclaimer_for(row["origin"], source=capability.source,
+                                             stand_in=True)
     else:
         row["label"] = None
         row["disclaimer"] = None
@@ -551,7 +656,8 @@ def _blocked_row(context: ProbeContext, capability: Capability, outcome: O.Outco
                  label: Optional[str] = None,
                  supersedes: Optional[dict] = None,
                  permission_state: Optional[str] = None,
-                 limitation: Optional[str] = None) -> dict:
+                 limitation: Optional[str] = None,
+                 stand_in: Optional[bool] = None) -> dict:
     evidence = dict(outcome.data or {})          # e.g. the Apple event code and message
     evidence.update({
         "outcome_code": outcome.code,
@@ -568,7 +674,7 @@ def _blocked_row(context: ProbeContext, capability: Capability, outcome: O.Outco
                     (f"{capability.limitation} — " if capability.limitation else "")
                     + (outcome.detail or outcome.code)),
                 evidence=evidence, origin=origin, adapter_is_real=adapter_is_real,
-                label=label, supersedes=supersedes, citations=())
+                label=label, supersedes=supersedes, citations=(), stand_in=stand_in)
 
 
 # ------------------------------------------------------------- per capability --
@@ -1011,14 +1117,17 @@ def _probe_deliberately_absent(context: ProbeContext, capability: Capability) ->
 
 
 def _probe_documented(context: ProbeContext, capability: Capability) -> dict:
-    """One row per capability the Gate 2 pack documents but this worker cannot measure.
+    """One row per capability no adapter in *this run* can measure.
 
     Nothing is contacted and nothing is claimed: the row is ``origin: documentation``,
     ``supported: false``, ``state: 'unmeasured'``, and it carries the pack refs it quotes,
     the page's own facts, the page's silences and the Mac procedure that would settle it.
-    This behaves identically on every host on purpose -- the source has no adapter here or
-    on the Mac yet, so there is nothing a different host could measure differently, and
-    inventing a host-specific answer would be the one thing this row must not do.
+
+    The fallback fires when the capability's source has no adapter **in this run** -- the
+    installed worker has adapters for Mail, Beeper, Contacts and Hermes, and a run can be
+    narrowed (``probe --mail-only``), so the honest sentence names the run, never the
+    worker (audit finding C: it used to print "this worker has no <source> adapter in this
+    slice", which stopped being true as each adapter landed).
     """
     from .documented_capabilities import PACK_PATH
     evidence = {
@@ -1029,9 +1138,9 @@ def _probe_documented(context: ProbeContext, capability: Capability) -> dict:
         "documented_absences": list(capability.absences),
         "mac_probe_procedure": list(capability.procedure),
         "why_unmeasured": (
-            "this worker has no " + capability.source + " adapter in this slice, so nothing "
-            "was read and nothing could be measured on any host. The row records the "
-            "documented surface and the procedure that measures it; it never records a "
+            "no " + capability.source + " adapter was in this run, so nothing was read for "
+            "this capability here and nothing could be measured on any host. The row records "
+            "the documented surface and the procedure that measures it; it never records a "
             "result. A documentation read can never set supported: true"),
         "no_source_contacted": True,
         "observed_version_reason": (
@@ -1170,6 +1279,7 @@ def run_probe(adapter, *, sample: int = 5, account: Optional[str] = None,
               beeper_account_id: Optional[str] = None,
               beeper_ui_oldest_visible: Optional[str] = None,
               contacts: Optional[dict] = None,
+              hermes: Optional[dict] = None,
               only_source: Optional[str] = None) -> ProbeRun:
     """Produce one row per capability. Never raises for an unsupported capability.
 
@@ -1180,7 +1290,7 @@ def run_probe(adapter, *, sample: int = 5, account: Optional[str] = None,
     context = ProbeContext(adapter, sample=sample, account=account, mailbox=mailbox,
                            max_scan=max_scan, beeper_account_id=beeper_account_id,
                            beeper_ui_oldest_visible=beeper_ui_oldest_visible,
-                           contacts=contacts)
+                           contacts=contacts, hermes=hermes)
     run = ProbeRun()
     for capability in CAPABILITIES:
         if only_source and capability.source != only_source:

@@ -230,7 +230,7 @@ class TestTheCliRefusesMalformedInput(GraceTestCase):
         payload = self.run_import("array.json", json.dumps(rows),
                                   I.PROBE_DOCUMENT_WRONG_SHAPE)
         command, produced = self.advised_command(payload)
-        subprocess.run(command, shell=True, check=True, cwd=self.dir)
+        subprocess.run(command, shell=True, stdin=subprocess.DEVNULL, check=True, cwd=self.dir)
         self.assertTrue(produced.exists(), command)
         proc = run_cli_raw(self.db, "probe-import", "--file", str(produced),
                            "--account", self.account)
@@ -244,7 +244,7 @@ class TestTheCliRefusesMalformedInput(GraceTestCase):
         payload = self.run_import("one-row.json", json.dumps(ONE_ROW),
                                   I.PROBE_DOCUMENT_WRONG_SHAPE)
         command, produced = self.advised_command(payload)
-        subprocess.run(command, shell=True, check=True, cwd=self.dir)
+        subprocess.run(command, shell=True, stdin=subprocess.DEVNULL, check=True, cwd=self.dir)
         proc = run_cli_raw(self.db, "probe-import", "--file", str(produced),
                            "--account", self.account)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)

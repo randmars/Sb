@@ -478,7 +478,7 @@ class TestRunLoop(unittest.TestCase):
         proc = subprocess.run(
             [sys.executable, "-m", "switchboard_mini", "--fixture-mode", "run", "--once",
              "--limit", "2", "--account", ACCOUNT, "--mailbox", MAILBOX],
-            capture_output=True, text=True, env=env, cwd=REPO_MINI)
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, cwd=REPO_MINI)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         documents = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
         events = [d["event"] for d in documents]

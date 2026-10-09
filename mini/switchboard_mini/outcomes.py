@@ -75,10 +75,15 @@ FIXTURE_DISCLAIMER = (
     "--fixture-mode. No Mail.app was contacted and no mailbox was read; these are not "
     "observations of any real mailbox or account."
 )
-#: A recorded read is labelled for the source it would have read. The Mail wording is the
-#: default because it came first; a Beeper fixture must not claim no *Mail* was contacted
-#: and say nothing about Beeper Desktop.
+#: A recorded read is labelled for the source it would have read. Every source the probe
+#: knows has its own entry, so no source can inherit another's wording by falling back:
+#: a Mail fixture must not claim no *Beeper Desktop* was contacted, and — the defect this
+#: map grew a ``hermes`` entry for — a Hermes fixture must not claim no *Mail.app* was
+#: contacted. ``FIXTURE_DISCLAIMER`` remains the default only for a source this map does
+#: not know, and ``test_mini_hermes`` asserts the map covers every source ``CAPABILITIES``
+#: declares, so the next source added cannot quietly land on the Mail wording.
 FIXTURE_DISCLAIMER_BY_SOURCE = {
+    "mail": FIXTURE_DISCLAIMER,
     "beeper": (
         "FIXTURE — answered from a recorded result shipped in this repository in "
         "--fixture-mode. No Beeper Desktop was contacted and no chat, message or contact "
@@ -89,8 +94,30 @@ FIXTURE_DISCLAIMER_BY_SOURCE = {
         "--fixture-mode. No Contacts database was read and no contact, identifier, key or "
         "change-history token was observed; these are not observations of any Mac."
     ),
+    "hermes": (
+        "FIXTURE — answered from a recorded result shipped in this repository in "
+        "--fixture-mode. No Hermes gateway was contacted and no capability, run, session or "
+        "event stream was observed; no token value is recorded here, and these are not "
+        "observations of any Hermes install."
+    ),
 }
 
+#: A **labelled loopback stand-in** answered, not the source. This is the third kind of
+#: responder the worker can be pointed at, and it is the one that used to be invisible in the
+#: label column: ``SWITCHBOARD_HERMES_STANDIN`` / ``--stand-in-server`` drives the *real*
+#: transport class against a local HTTP responder, so the row was ``origin: real`` with a
+#: NULL label and the only tell sat inside ``evidence``. A reader filtering on the label or
+#: on ``origin`` alone saw a real-origin row for a run that contacted no gateway at all.
+#: Every row answered by a stand-in now carries this label and the disclaimer below.
+STAND_IN_LABEL_PREFIX = "STAND-IN:"
+
+REAL_DISCLAIMER = None
+STAND_IN_DISCLAIMER = (
+    "STAND-IN — a labelled loopback stand-in HTTP responder answered this row, not the "
+    "source. It is not Hermes, not Mail.app, not Beeper Desktop and not Contacts: it is a "
+    "local test server in this repository, so nothing here is an observation of Randy's "
+    "machine or of any install, and this row may never be read as a measurement."
+)
 DOCUMENTATION_DISCLAIMER = (
     "DOCUMENTATION — recorded from a public reference page in the Gate 2 probe pack, not "
     "from this machine or Randy's. No source was contacted by this row and no capability "
@@ -122,13 +149,44 @@ def is_documentation_label(value: Any) -> bool:
     return isinstance(value, str) and value.startswith(DOCUMENTATION_LABEL_PREFIX)
 
 
+def stand_in_label(source: str, detail: Optional[str] = None) -> str:
+    """``STAND-IN:hermes`` — what a row answered by a labelled loopback stand-in is called.
+
+    The label column is where the labelling rule lives, so a stand-in row says it *there*
+    and not only inside ``evidence``. ``origin`` stays whatever the vocabulary honestly
+    supports (a stand-in is driven through the real transport class, so ``origin`` is
+    ``real``: "the real adapter produced this row", which is not a claim about the source).
+    """
+    label = f"{STAND_IN_LABEL_PREFIX}{source}"
+    if detail:
+        label = f"{label}({detail})"
+    return label
+
+
+def is_stand_in_label(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith(STAND_IN_LABEL_PREFIX)
+
+
 def fixture_disclaimer(source: Optional[str] = None) -> str:
     """The fixture disclaimer for a source: it must name the source it did *not* contact."""
     return FIXTURE_DISCLAIMER_BY_SOURCE.get(source or "", FIXTURE_DISCLAIMER)
 
 
-def disclaimer_for(origin: str, source: Optional[str] = None) -> Optional[str]:
-    """The one disclaimer for each non-real origin. Never a real-source claim."""
+def stand_in_disclaimer(source: Optional[str] = None) -> str:
+    """The disclaimer for a stand-in row. It names what answered, and what that is not."""
+    return STAND_IN_DISCLAIMER
+
+
+def disclaimer_for(origin: str, source: Optional[str] = None,
+                   stand_in: bool = False) -> Optional[str]:
+    """The one disclaimer for each non-real origin. Never a real-source claim.
+
+    ``stand_in`` is checked first because it outranks the origin: a stand-in row is
+    ``origin: real`` (the real adapter produced it) while no source answered it, and the
+    disclaimer is the one place that has to say so.
+    """
+    if stand_in:
+        return stand_in_disclaimer(source)
     if origin == FIXTURE:
         return fixture_disclaimer(source)
     if origin == DOCUMENTATION:
@@ -143,12 +201,18 @@ def probe_row_supported_claim_allowed(row: dict) -> bool:
     never set ``supported: true``**. A row whose evidence is a page is a question, not a
     measurement, so it is ``unmeasured`` until something observes it.
 
+    And one addition from the stand-in defect (2026-10-09): a row answered by a **labelled
+    loopback stand-in** may not be ``supported`` either. The stand-in is not the source, so
+    its answer is not an observation of anything, and support means an observation held.
+
     Grace holds the identical rule at write time
     (``grace/contracts.py::probe_row_supported_claim_allowed``); ``tests/
     test_shared_vocabulary.py`` asserts the two agree.
     """
     if not row.get("supported"):
         return True
+    if row.get("stand_in"):
+        return False
     if row.get("origin") == DOCUMENTATION:
         return False
     return True

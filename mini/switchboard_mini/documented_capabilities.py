@@ -76,7 +76,7 @@ DOCUMENTED_CAPABILITIES: tuple = (
         probe_assertion="the local API answers a bearer-authenticated read on this "
                         "install: an HTTP status and a JSON body with the documented keys, "
                         "observed from that install",
-        limitation="unmeasured on every host so far: this worker has no Beeper adapter, so "
+        limitation="unmeasured on every host so far: no Beeper adapter was in the run that produced this row, so "
                    "nothing was contacted. The pack is a documentation read (O05, O11) and "
                    "O05 states no base URL or port, no authentication detail and no "
                    "endpoint list",
@@ -127,7 +127,7 @@ DOCUMENTED_CAPABILITIES: tuple = (
         probe_assertion="a documented search call returns matching items on this install, "
                         "with the fields the page documents (items, hasMore, newestCursor, "
                         "oldestCursor) observed in the response",
-        limitation="unmeasured: no Beeper adapter exists in this worker. O06 documents the "
+        limitation="unmeasured: no Beeper adapter was in the run that produced this row. O06 documents the "
                    "call but makes no completeness claim, so a search result may never be "
                    "reported as proof of complete ingestion",
         documented=(
@@ -174,7 +174,7 @@ DOCUMENTED_CAPABILITIES: tuple = (
         probe_assertion="a number: the oldest reachable timestamp from the API, recorded "
                         "beside the oldest visible in the UI for the same account, so a "
                         "history gap is measurable rather than described",
-        limitation="unmeasured: no Beeper adapter exists in this worker; O05 states the "
+        limitation="unmeasured: no Beeper adapter was in the run that produced this row; O05 states the "
                    "limit only in words, with no number",
         documented=(
             "O05: 'Message history might be limited. Beeper indexes your messages from the "
@@ -208,7 +208,7 @@ DOCUMENTED_CAPABILITIES: tuple = (
         probe_assertion="a send on this install returns both documented response fields — "
                         "pendingMessageID and the chatID the send was actually routed to — "
                         "so a submission is attributable before the network confirms it",
-        limitation="unmeasured: this worker has no send path at all and no Beeper adapter, "
+        limitation="unmeasured: no Beeper adapter was in this run, and the worker has no send path at all, "
                    "so nothing was sent anywhere. The row records what the send response "
                    "must be measured to contain, never that sending works",
         documented=(
@@ -321,7 +321,7 @@ DOCUMENTED_CAPABILITIES: tuple = (
         probe_assertion="an attachment referenced by an mxc:// or localmxc:// URL is "
                         "materialised to a local file path by this install, and the path "
                         "is readable by the worker process",
-        limitation="unmeasured: this worker has no Beeper adapter and materialises no "
+        limitation="unmeasured: no Beeper adapter was in this run and the worker materialises no "
                    "bytes. Attachment *sending* needs an uploadID from an 'uploadAsset' "
                    "endpoint that is not among the Appendix B references at all, so that "
                    "half of the path has no sourced evidence",
@@ -372,7 +372,7 @@ DOCUMENTED_CAPABILITIES: tuple = (
         probe_assertion="the documented prefill call returns success: true on this "
                         "install and the text is observed in the composer — with what "
                         "survives recorded, since the page states no draft lifecycle",
-        limitation="unmeasured: this worker has no Beeper adapter, and prefill is not a "
+        limitation="unmeasured: no Beeper adapter was in this run, and prefill is not a "
                    "draft: O08 documents no read, list, update, send or delete operation "
                    "for it, so it cannot back a durable draft or an approval bound to one",
         documented=(
@@ -419,7 +419,7 @@ DOCUMENTED_CAPABILITIES: tuple = (
                         "and delivers domain events with the documented fields (type, "
                         "seq, ts, chatID, ids, entries) — and the gap behaviour is "
                         "recorded rather than assumed",
-        limitation="unmeasured: no Beeper adapter exists in this worker, so no socket was "
+        limitation="unmeasured: no Beeper adapter was in this run, so no socket was "
                    "opened. O07 is an experimental surface with no replay, backlog or "
                    "recovery behaviour, so it may never be treated as a durable event log",
         documented=(
@@ -473,7 +473,7 @@ DOCUMENTED_CAPABILITIES: tuple = (
         probe_assertion="the documented contacts call returns merged contacts for one "
                         "account on this install, with a stable user id and the "
                         "field-presence of email/phone/fullName observed as counts",
-        limitation="unmeasured: no Beeper adapter exists in this worker. O12 scopes contact "
+        limitation="unmeasured: no Beeper adapter was in the run that produced this row. O12 scopes contact "
                    "merging per account and states nothing about how contacts from "
                    "different accounts relate to one person, so this cannot be used as an "
                    "identity-linking source without measurement",
@@ -527,7 +527,7 @@ DOCUMENTED_CAPABILITIES: tuple = (
                      "call reports and whether it blocked",
         probe_assertion="the declaration ships in the helper's Info.plist and a denial is "
                         "observable as a typed state this worker produces, on this Mac",
-        limitation="unmeasured: no Contacts adapter exists in this worker and no helper "
+        limitation="unmeasured: no Contacts adapter was in this run and no helper "
                    "was run on a Mac. No page read in the pack names a queryable "
                    "permission-state API, so typed denial is ours to build and observe, "
                    "not something we inherit",
@@ -583,7 +583,7 @@ DOCUMENTED_CAPABILITIES: tuple = (
         probe_assertion="a bounded fetch on this Mac returns contacts and the count of "
                         "contacts carrying a non-empty email address and phone number, "
                         "with only the requested keys fetched",
-        limitation="unmeasured: no Contacts adapter exists in this worker, so no fetch has "
+        limitation="unmeasured: no Contacts adapter was in this run, so no fetch has "
                    "run anywhere. O13 states that every fetched object is partial and that "
                    "reading an unfetched property raises, so the key set must be measured "
                    "before it can be trusted",
@@ -630,7 +630,7 @@ DOCUMENTED_CAPABILITIES: tuple = (
                         "(persistable between app launches, unique on this device), and "
                         "the unified identifier is observed to differ from the "
                         "constituents', so the linking key can be named",
-        limitation="unmeasured: no Contacts adapter exists in this worker. Apple states "
+        limitation="unmeasured: no Contacts adapter was in this run. Apple states "
                    "twice that an identifier is device-local, so the linking key must be "
                    "(device/source installation, identifier) — never the identifier alone "
                    "— and that key has not been exercised against a real store",
@@ -722,7 +722,7 @@ DOCUMENTED_CAPABILITIES: tuple = (
                         "classes and a currentHistoryToken, and the drop-everything reset "
                         "sequence is observed when the token is invalid — the observable "
                         "half of T11",
-        limitation="unmeasured: no Contacts adapter exists in this worker. A change-history "
+        limitation="unmeasured: no Contacts adapter was in this run. A change-history "
                    "reset is observable but not provocable by us: the only documented "
                    "trigger is passing a nil/invalid/expired token, and the pack records "
                    "no way to invalidate a token on demand, so T11's reset leg stays a "
@@ -799,7 +799,7 @@ DOCUMENTED_CAPABILITIES: tuple = (
                         "the documented envelope with a features map observed on that "
                         "build, so Grace can discover runs/streaming/cancellation/session "
                         "support instead of assuming it",
-        limitation="unmeasured: no Hermes adapter exists in this worker and no gateway was "
+        limitation="unmeasured: no Hermes adapter was in this run and no gateway was "
                    "contacted. O17 says the page describes the current docs surface; "
                    "whether Randy's build serves it and what it returns is a Mac "
                    "measurement and nothing in the pack asserts it",
@@ -859,7 +859,7 @@ DOCUMENTED_CAPABILITIES: tuple = (
                         "status, reports the terminal status through "
                         "GET /v1/runs/{run_id}, and replays an identical retry under the "
                         "same Idempotency-Key — all observed on that build",
-        limitation="unmeasured: no Hermes adapter exists in this worker and no run has "
+        limitation="unmeasured: no Hermes adapter was in this run and no run has "
                    "been submitted. The documented surface is what Gate 3 must be planned "
                    "against; the installed build is what must be measured",
         documented=(
@@ -911,7 +911,7 @@ DOCUMENTED_CAPABILITIES: tuple = (
         probe_assertion="this build streams the documented progress event names on a run, "
                         "so Grace can show progress from real events rather than polling "
                         "guesses",
-        limitation="unmeasured: no Hermes adapter exists in this worker and no event stream "
+        limitation="unmeasured: no Hermes adapter was in this run and no event stream "
                    "was opened. Which of the documented event names this build emits is "
                    "exactly what the Mac probe has to record",
         documented=(
@@ -953,7 +953,7 @@ DOCUMENTED_CAPABILITIES: tuple = (
         probe_assertion="this build accepts a stop, answers {\"status\": \"stopping\"} "
                         "immediately, and the run settles as a terminal status observed "
                         "by polling — stop never hiding a worker that is still running",
-        limitation="unmeasured: no Hermes adapter exists in this worker and no run was "
+        limitation="unmeasured: no Hermes adapter was in this run and no run was "
                    "started or stopped. The documented response shape is what Gate 3 must "
                    "handle; the observed settling behaviour has to come off the Mac",
         documented=(
@@ -985,7 +985,7 @@ DOCUMENTED_CAPABILITIES: tuple = (
                         "(the returned session_id is echoed unchanged) and the documented "
                         "session-key header is accepted, so a resumed job stays "
                         "attributable to its original conversation",
-        limitation="unmeasured: no Hermes adapter exists in this worker. Two different "
+        limitation="unmeasured: no Hermes adapter was in this run. Two different "
                    "'session key' concepts are documented (O17's X-Hermes-Session-Key is "
                    "memory scope; O18's gateway routing key agent:main:<platform>:... maps "
                    "to a session ID), so which his build exposes has to be asked of his "
@@ -1048,10 +1048,16 @@ DOCUMENTED_CAPABILITIES: tuple = (
                      "in an interactive session, let one prompt time out, and repeat in a "
                      "headless/API context",
         probe_assertion="the installed build's approval behaviour for shell commands is "
-                        "observed: which mode is configured, whether a timed-out prompt "
-                        "denies, and whether an unattended/API surface denies instantly or "
-                        "raises approval.request",
-        limitation="unmeasured: no Hermes adapter exists in this worker and no command was "
+                        "observed for the one trigger the owner ran: whether a "
+                        "dangerous-class command is held for a human decision (a pending "
+                        "prompt the owner had to answer) or denied without one on the "
+                        "surface they ran it in. The other sub-behaviours the documented "
+                        "surface describes — the active profile's configured approvals.mode "
+                        "value, what a prompt that times out does, and whether an "
+                        "unattended/api_server surface denies instantly or raises "
+                        "approval.request — are recorded on the row as unmeasured unless the "
+                        "owner's own observation covered them",
+        limitation="unmeasured: no Hermes adapter was in this run and no command was "
                    "run. This is a runtime safeguard for shell commands; it approves no "
                    "recipient, message or audience, so the immutable send approval Grace "
                    "owes (PRD line 224) remains entirely ours",
@@ -1113,7 +1119,7 @@ DOCUMENTED_CAPABILITIES: tuple = (
                         "failure behaviour is observed on this install — including the "
                         "documented fallback — so Grace's own post-resolution check can be "
                         "written against a measurement",
-        limitation="unmeasured: no Hermes adapter exists in this worker and nothing was "
+        limitation="unmeasured: no Hermes adapter was in this run and nothing was "
                    "contacted. The vendor documents fail-OPEN behaviour ('it never blocks "
                    "startup'), so fail-closed credential checking is ours to build: Grace "
                    "must verify each required credential after resolution and refuse to "
@@ -1179,10 +1185,15 @@ DOCUMENTED_CAPABILITIES: tuple = (
                      "GUI-only command under an ssh backend and under a headless local "
                      "launchd context",
         probe_assertion="the execution backend this install actually uses is recorded, and "
-                        "whether an approved computer/desktop action is reachable from it "
-                        "is measured — including the case where it is not, which would "
-                        "refute our inference",
-        limitation="unmeasured: no Hermes adapter exists in this worker and no command was "
+                        "the capability surface this build returns — the advertised feature "
+                        "keys, the toolset names and the tool names — is searched for a "
+                        "computer/desktop/GUI mechanism, with the result recorded either way: "
+                        "observed_absent when no such name is present (which would refute our "
+                        "inference) and the name itself when one is. Reachability of an "
+                        "approved computer action from that backend is not asserted by this "
+                        "row: no record in the pack names such a mechanism, so the row "
+                        "records what the observed surface contains and no more",
+        limitation="unmeasured: no Hermes adapter was in this run and no command was "
                    "run. No page in the pack names a computer/GUI/desktop execution mode, "
                    "so PRD line 251's SSH/GUI privilege sentence is our inference, not "
                    "vendor text, and it is allowed to be refuted by this measurement",

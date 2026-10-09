@@ -71,7 +71,7 @@ COMMANDS = (
 
 def run_worker(args, *, env=None):
     """Run the installed launcher exactly as Randy's runbook does."""
-    proc = subprocess.run(["bash", LAUNCHER] + list(args), capture_output=True, text=True,
+    proc = subprocess.run(["bash", LAUNCHER] + list(args), stdin=subprocess.DEVNULL, capture_output=True, text=True,
                           timeout=180, env=env)
     return proc
 
@@ -670,7 +670,7 @@ class ContactsStandInBridgeTests(unittest.TestCase):
                 handle.write(build_script(request))
             with open(harness, "w", encoding="utf-8") as handle:
                 handle.write(STAND_IN_HARNESS)
-            proc = subprocess.run(["node", harness, cfg, script], capture_output=True,
+            proc = subprocess.run(["node", harness, cfg, script], stdin=subprocess.DEVNULL, capture_output=True,
                                   text=True, timeout=60)
             self.assertEqual(proc.returncode, 0, proc.stderr)
             payload = json.loads(proc.stdout)

@@ -58,7 +58,7 @@ class TestOneDefaultDatabasePath(unittest.TestCase):
             env = {k: v for k, v in os.environ.items() if k != store.DEFAULT_DB_ENV}
             env["HOME"] = home
             proc = subprocess.run([sys.executable, "-m", "grace", "seed", "--reset"],
-                                 cwd=REPO_ROOT, capture_output=True, text=True, env=env)
+                                 cwd=REPO_ROOT, stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env)
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             expected = Path(home) / ".switchboard" / "grace.sqlite3"
             self.assertTrue(expected.exists(),
@@ -72,7 +72,7 @@ class TestOneDefaultDatabasePath(unittest.TestCase):
             env["HOME"] = str(home)
             env[store.DEFAULT_DB_ENV] = override
             proc = subprocess.run([sys.executable, "-m", "grace", "seed", "--reset"],
-                                 cwd=REPO_ROOT, capture_output=True, text=True, env=env)
+                                 cwd=REPO_ROOT, stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env)
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertTrue(Path(override).exists())
             self.assertFalse((home / ".switchboard" / "grace.sqlite3").exists(),

@@ -1,0 +1,51 @@
+{
+ "scenario": "token_rejected",
+ "label": "FIXTURE:hermes('token_rejected' recorded scenario)",
+ "recorded_from": "a Hermes API server (O17) as described by the probe pack; recorded by hand for this repository, not captured from Randy's install",
+ "note": "The recorded gateway answered 401 to the bearer-gated reads: the key it was started with is not the key presented. Nothing was read and no document was built from a body.",
+ "disclaimer": "A recorded result, not a live connection: this file holds what a read returned when it was recorded, so the worker's parsing, refusals and row contract can be exercised on a host that has no Hermes gateway. Every document built from it is labelled FIXTURE: and can never claim a real source. No token value is stored here: only whether a key was configured.",
+ "base_url": "http://127.0.0.1:8642",
+ "token_present": true,
+ "token_env": "API_SERVER_KEY",
+ "responses": {
+  "capabilities": {
+   "status": 401
+  },
+  "toolsets": {
+   "status": 401
+  },
+  "skills": {
+   "status": 401
+  },
+  "health": {
+   "status": 401
+  },
+  "health_v1": {
+   "status": 401
+  },
+  "health_detailed": {
+   "status": 401
+  },
+  "sessions": {
+   "status": 401
+  },
+  "session": {
+   "status": 401
+  },
+  "session_messages": {
+   "status": 401
+  },
+  "run": {
+   "status": 401
+  },
+  "run_submit": {
+   "status": 401
+  },
+  "run_events": {
+   "status": 401
+  },
+  "run_stop": {
+   "status": 401
+  }
+ }
+}

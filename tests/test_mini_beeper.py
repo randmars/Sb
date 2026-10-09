@@ -327,7 +327,7 @@ class TestTheTokenValueIsNeverEmitted(BeeperStandInCase):
         env = dict(os.environ, PYTHONPATH=str(MINI))
         env["SWITCHBOARD_MINI_STATE"] = os.path.join(
             tempfile.mkdtemp(prefix="mini-beeper-state-"), "state.json")
-        return subprocess.run(argv, capture_output=True, text=True, env=env,
+        return subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env,
                               cwd=str(MINI))
 
 
