@@ -303,7 +303,7 @@ mock adapters.
 ## Tests
 
 ```bash
-python3 -m unittest discover -s tests -t .           # 505 tests, no third-party dependency
+python3 -m unittest discover -s tests -t .           # 517 tests, no third-party dependency
 ```
 
 The five required scenarios:
